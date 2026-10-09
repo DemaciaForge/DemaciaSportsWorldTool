@@ -26,7 +26,7 @@ pub fn draw(ctx: &egui::Context) {
                 .show(ui, |ui| {
                     ui.set_max_width(320.0);
                     ui.label(
-                        egui::RichText::new("开源项目 · 禁止倒卖")
+                        egui::RichText::new("本项目完全开源 · 完全免费")
                             .small()
                             .strong()
                             .color(theme::text_dim()),
@@ -38,6 +38,14 @@ pub fn draw(ctx: &egui::Context) {
                             )
                             .small()
                             .color(theme::text_dim()),
+                        )
+                        .wrap(),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("如果您是付费的，请向售卖者提出退款")
+                                .small()
+                                .color(theme::warn()),
                         )
                         .wrap(),
                     );
