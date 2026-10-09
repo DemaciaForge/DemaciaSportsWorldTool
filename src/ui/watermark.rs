@@ -51,14 +51,6 @@ pub fn draw(ctx: &egui::Context) {
                     );
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new("倒卖者不孕不育子孙满堂")
-                                .small()
-                                .color(theme::err()),
-                        )
-                        .wrap(),
-                    );
-                    ui.add(
-                        egui::Label::new(
                             egui::RichText::new(
                                 "GitHub 开源项目：YanamiNeko/NekoSportsWorldTool",
                             )
