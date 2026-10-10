@@ -93,21 +93,26 @@ fn edge_inside(polys: &[Vec<Coord>], a: Coord, b: Coord) -> bool {
 
 /// 生成路网预览（对齐 + 围栏裁剪 + 闭环路由），不产生协议字段。
 ///
-/// 预览阶段拿不到 policy 必经点，故仅做「软引导 + 吸附」，不强制经过任何打卡点。
+/// 硬点与真实提交一致：必经点（`fixed`）+ 随机 `pick` 个普通点（`ordinary`），
+/// 全部强经过；随机性由 `seed` 决定，与实际运行同 seed 时选择一致。
+/// `pick` 为随机抽取的普通点数量（运行时可变，别写死）。
 pub fn plan_road_view(
     net: &RoadGraph,
-    points_bd: &[(f64, f64)],
+    fixed: &[(f64, f64)],
+    ordinary: &[(f64, f64)],
     dist: f64,
     seed: u64,
     fences: &[Vec<(f64, f64)>],
+    pick: usize,
 ) -> Result<RoadPlan, String> {
     let mut g = net.clone();
     align_network(&mut g);
     g = apply_fences(&g, fences);
-    let ordered = radial_order(points_bd);
+    let ordered = select_route_points(fixed, ordinary, seed, pick);
     let waypoints: Vec<Coord> = ordered.iter().map(|p| Coord::new(p.1, p.0)).collect();
+    let must_pass: Vec<Coord> = waypoints.iter().skip(1).copied().collect();
     let opts = RouteOptions::default();
-    let route = plan_route_split(&g, &waypoints, &[], dist, seed, &opts)?;
+    let route = plan_route_split(&g, &waypoints, &must_pass, dist, seed, &opts)?;
     let route_pts: Vec<(f64, f64)> = route.points.iter().map(|p| (p.lat, p.lon)).collect();
     let edges: Vec<Vec<(f64, f64)>> = g
         .edges_deg()
@@ -152,6 +157,35 @@ pub fn align_network(net: &mut RoadGraph) {
     }
     net.compute_anchor();
     net.rebuild_index();
+}
+
+/// 真实道路模式随机选中的普通打卡点数量的默认值（运行时可变，别写死）。
+pub const DEFAULT_ORDINARY_PICK: usize = 2;
+
+/// 从点位挑选参与路线的硬点：必经点（`fixed`，全部）+ 随机 `pick` 个普通点
+/// （`ordinary`）。结果按质心角排序成自然环序（`radial_order`），首个即起点。
+/// 随机性由 `seed` 决定，保证预览与实际运行可复现且一致。
+pub fn select_route_points(
+    fixed: &[(f64, f64)],
+    ordinary: &[(f64, f64)],
+    seed: u64,
+    pick: usize,
+) -> Vec<(f64, f64)> {
+    use rand::seq::SliceRandom;
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed ^ 0x5EED_C0FF_EE00_1234);
+    let mut pool = ordinary.to_vec();
+    pool.shuffle(&mut rng);
+    let near = |a: &(f64, f64), b: &(f64, f64)| {
+        (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6
+    };
+    let mut selected: Vec<(f64, f64)> = fixed.to_vec();
+    for p in pool.into_iter().take(pick) {
+        if !selected.iter().any(|q| near(q, &p)) {
+            selected.push(p);
+        }
+    }
+    radial_order(&selected)
 }
 
 /// 按质心角度排序打卡点，形成自然环序。

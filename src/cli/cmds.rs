@@ -126,6 +126,9 @@ fn cmd_run(rest: &[&str]) -> i32 {
     let route_mode = crate::track::generate_road::RouteMode::from_str(
         get(&flags, "route").unwrap_or(&cfg.route_mode),
     );
+    let ordinary_pick: usize = get(&flags, "pick")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(cfg.ordinary_pick);
 
     let dist = if dist_km > 0.0 {
         dist_km as f64 * 1000.0
@@ -177,6 +180,7 @@ fn cmd_run(rest: &[&str]) -> i32 {
         manual_altitude_range,
         seed,
         route_mode,
+        ordinary_pick,
     };
     match crate::api::flow::run_full_flow(&mut client, &params, &mut log) {
         Ok(out) => {
