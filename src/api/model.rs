@@ -10,6 +10,24 @@ pub const HOST: &str = "https://run.gxapp.iydsj.com";
 /// 排行榜 / 违规名单域名（信封链与 RUN 相同）。
 pub const DISCOVERY: &str = "https://discovery.gxapp.iydsj.com";
 
+/// 详情页路线颜色模式。
+///
+/// 全绿色模式只生成官方详情页会识别为绿色的普通轨迹点；绿灰混合模式
+/// 保留原有的点类型和状态分布，便于需要兼容旧行为的用户使用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrackColorMode {
+    FullGreen,
+    #[serde(alias = "preserve_gray")]
+    HalfGreenGray,
+}
+
+impl Default for TrackColorMode {
+    fn default() -> Self {
+        Self::FullGreen
+    }
+}
+
 /// 登录态（session.json）。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Session {
@@ -67,6 +85,9 @@ pub struct Config {
     /// 跑步时将生成器海拔曲线映射到此范围；为空表示不使用范围覆盖。
     #[serde(default)]
     pub manual_altitude_range: Option<crate::track::altitude::AltitudeRange>,
+    /// 详情页路线颜色模式，缺省为全绿色。
+    #[serde(default)]
+    pub track_color_mode: TrackColorMode,
     #[serde(default = "default_ai_minutes")]
     pub ai_minutes: i64,
     #[serde(default = "default_ai_reps")]
@@ -118,6 +139,7 @@ impl Default for Config {
             face_check: true,
             manual_altitude: None,
             manual_altitude_range: None,
+            track_color_mode: TrackColorMode::default(),
             ai_minutes: default_ai_minutes(),
             ai_reps: default_ai_reps(),
             update_check: default_update_check(),
@@ -247,6 +269,18 @@ pub fn save_config(c: &Config) -> Result<(), String> {
 #[cfg(test)]
 mod storage_tests {
     use super::*;
+
+    #[test]
+    fn track_color_mode_defaults_to_full_green_and_round_trips() {
+        let default_config: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(default_config.track_color_mode, TrackColorMode::FullGreen);
+        let mixed: Config = serde_json::from_value(serde_json::json!({
+            "track_color_mode": "half_green_gray"
+        }))
+        .unwrap();
+        assert_eq!(mixed.track_color_mode, TrackColorMode::HalfGreenGray);
+        assert_eq!(serde_json::to_value(&mixed).unwrap()["track_color_mode"], "half_green_gray");
+    }
 
     #[test]
     fn android_identity_import_persists_brand_and_reuses_uuid() {
