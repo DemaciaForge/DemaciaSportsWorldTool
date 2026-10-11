@@ -38,7 +38,7 @@ pub fn fetch_geo_fence_with_area(client: &mut ApiClient) -> Result<GeoFenceRespo
         .unwrap_or_default();
 
     let mut out: Vec<Vec<(f64, f64)>> = Vec::new();
-    for f in fences {
+    for f in &fences {
         let Some(pts) = f.get("points").and_then(|v| v.as_array()) else {
             continue;
         };
@@ -51,11 +51,61 @@ pub fn fetch_geo_fence_with_area(client: &mut ApiClient) -> Result<GeoFenceRespo
             out.push(ring);
         }
     }
-    let area = crate::api::points::area_from_payload(&biz, &[]);
+    let mut area = crate::api::points::area_from_payload(&biz, &[]);
+    // The standalone endpoint may return lon/glon/pointsNumber, while the
+    // detail payload used by the official client uses lng/glng and the compact
+    // fence-point shape.  Keep the server-provided geometry, but emit that
+    // canonical shape so the detail map can recognize the green boundary.
+    if !out.is_empty() {
+        area.geo_fences_json = canonical_fences_json(&fences);
+        area.freedom_show_fence = area.geo_fences_json != "[]";
+    }
     Ok(GeoFenceResponse {
         polygons: out,
         area,
     })
+}
+
+fn canonical_fences_json(fences: &[Value]) -> String {
+    let canonical: Vec<Value> = fences
+        .iter()
+        .filter_map(|fence| {
+            let points = fence.get("points")?.as_array()?;
+            let points: Vec<Value> = points
+                .iter()
+                .filter_map(|point| {
+                    let mut output = serde_json::Map::new();
+                    for (canonical, aliases) in [
+                        ("lat", &["lat", "latitude"][..]),
+                        ("lng", &["lng", "lon", "longitude"][..]),
+                        ("glat", &["glat"][..]),
+                        ("glng", &["glng", "glon"][..]),
+                    ] {
+                        if let Some(value) = aliases.iter().find_map(|name| point.get(*name)) {
+                            output.insert(canonical.into(), value.clone());
+                        }
+                    }
+                    (output.contains_key("lat") && output.contains_key("lng")).then_some(Value::Object(output))
+                })
+                .collect();
+            if points.len() < 3 {
+                return None;
+            }
+            let mut output = serde_json::Map::new();
+            for name in ["id", "name"] {
+                if let Some(value) = fence.get(name) {
+                    output.insert(name.into(), value.clone());
+                }
+            }
+            output.insert("points".into(), Value::Array(points));
+            Some(Value::Object(output))
+        })
+        .collect();
+    if canonical.is_empty() {
+        "[]".into()
+    } else {
+        Value::Array(canonical).to_string()
+    }
 }
 
 /// 取一个点的 (lat, lon)（BD-09）。优先 lat/lon，缺失或全 0 时回退 glat/glon（GCJ→BD）。
@@ -81,8 +131,8 @@ fn field_num(p: &Value, keys: &[&str]) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::point_xy;
-    use serde_json::json;
+    use super::{canonical_fences_json, point_xy};
+    use serde_json::{json, Value};
 
     #[test]
     fn point_xy_prefers_bd_then_gcj_fallback() {
@@ -101,5 +151,23 @@ mod tests {
         // 全缺
         let p = json!({ "foo": 1 });
         assert_eq!(point_xy(&p), None);
+    }
+
+    #[test]
+    fn canonical_fence_uses_detail_map_coordinate_names() {
+        let value = canonical_fences_json(&[json!({
+            "id": 1774,
+            "name": "学校",
+            "points": [
+                {"lat": 39.4, "lon": 116.2, "glat": 39.3, "glon": 116.1},
+                {"lat": 39.4, "lon": 116.3, "glat": 39.3, "glon": 116.2},
+                {"lat": 39.5, "lon": 116.3, "glat": 39.4, "glon": 116.2}
+            ]
+        })]);
+        let parsed: Value = serde_json::from_str(&value).unwrap();
+        assert_eq!(parsed[0]["id"], 1774);
+        assert_eq!(parsed[0]["points"][0]["lng"], 116.2);
+        assert_eq!(parsed[0]["points"][0]["glng"], 116.1);
+        assert!(parsed[0]["points"][0].get("lon").is_none());
     }
 }

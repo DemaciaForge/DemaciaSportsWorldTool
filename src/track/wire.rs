@@ -107,7 +107,10 @@ pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
                 "glat": p["glat"].as_f64().unwrap_or(0.0),
                 "glon": p["glon"].as_f64().unwrap_or(0.0),
                 "id": i as i64 + 1,
-                "isFixed": p["isFixed"].as_i64().unwrap_or(0),
+                // 跑完态的 fivePointJson 要把本次命中的打卡点标为固定点。
+                // 点位接口有时只把起点标成 1（其余返回 0），但已验证的
+                // 成功载荷要求所有已通过点均为 isFixed=1。
+                "isFixed": 1,
                 "isPass": true,
                 "lat": p["lat"].as_f64().unwrap_or(0.0),
                 "lon": p["lon"].as_f64().unwrap_or(0.0),
@@ -238,6 +241,22 @@ mod validation_tests {
         assert_eq!(value["runAreaId"], 42);
         assert_eq!(value["geoFencesJson"], "[{\"x\":1}]");
         assert_eq!(value["freedomShowFence"], true);
+    }
+
+    #[test]
+    fn completed_fixed_points_are_marked_fixed_even_if_source_point_is_zero() {
+        let points = vec![json!({
+            "lat": 39.9,
+            "lon": 116.4,
+            "glat": 39.9,
+            "glon": 116.4,
+            "isFixed": 0,
+        })];
+        let value: Value = serde_json::from_str(&five_point_wrapper(&points, 1_700_000_000_000)).unwrap();
+        let raw = value["fivePointJson"].as_str().unwrap();
+        let fixed: Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(fixed[0]["isFixed"], 1);
+        assert_eq!(fixed[0]["isPass"], true);
     }
 
     #[test]
