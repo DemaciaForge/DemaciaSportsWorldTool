@@ -14,6 +14,8 @@ pub struct PolicyInfo {
     pub valid_time: i64,
     /// 必经点（BD 系，与打卡点同系），policy 响应里若有则返回。
     pub must_points: Vec<(f64, f64)>,
+    /// 服务端可选的校园区域/绿色围栏元数据；没有配置时为自由跑默认值。
+    pub area: crate::track::wire::RunAreaMeta,
 }
 
 /// 将已解密的业务响应解析为稳定的策略模型，供网络路径和 fixture 测试共用。
@@ -36,6 +38,7 @@ pub(crate) fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
             .unwrap_or(1000),
         valid_time: rule.get("validTime").and_then(|t| t.as_i64()).unwrap_or(0),
         must_points: extract_must_points(biz),
+        area: super::points::area_from_payload(biz, &[]),
     })
 }
 
