@@ -184,6 +184,11 @@ pub(crate) fn area_from_payload(payload: &Value, points: &[Value]) -> crate::tra
         if fences.is_none() { fences = find_value_recursive(point, &fence_names, 3).filter(usable_fence); }
         if show.is_none() { show = find_true_field(point, &show_names, 3).or_else(|| find_value_recursive(point, &show_names, 3)); }
     }
+    // getGeoFenceForRun 的围栏对象通常只有自身 id（例如 1774），而不重复
+    // 返回 runAreaId；这个 id 就是 fixed_point_json 要回传的区域 id。
+    if run_area_id.is_none() {
+        run_area_id = fences.as_ref().and_then(fence_area_id);
+    }
     let run_area_id = run_area_id.unwrap_or(-1);
     let geo_fences_json = fences.as_ref()
         .map(value_as_json_string)
@@ -218,6 +223,20 @@ fn usable_fence(value: &Value) -> bool {
     let text = value_as_json_string(value);
     serde_json::from_str::<Value>(text.trim()).ok()
         .is_some_and(|parsed| matches!(parsed, Value::Array(items) if !items.is_empty()))
+}
+
+fn fence_area_id(value: &Value) -> Option<i64> {
+    let parsed = match value {
+        Value::String(text) => serde_json::from_str::<Value>(text).ok()?,
+        other => other.clone(),
+    };
+    let items = parsed.as_array()?;
+    items.iter().find_map(|fence| {
+        ["runAreaId", "runAreaID", "areaId", "areaID", "id"]
+            .iter()
+            .find_map(|name| fence.get(*name).and_then(value_as_i64))
+            .filter(|id| *id >= 0)
+    })
 }
 
 fn find_true_field(root: &Value, names: &[&str], depth: usize) -> Option<Value> {
@@ -341,5 +360,15 @@ mod tests {
         assert_eq!(area.run_area_id, 9);
         assert!(!area.freedom_show_fence);
         assert_eq!(area.geo_fences_json, "[]");
+    }
+
+    #[test]
+    fn area_metadata_uses_fence_id_when_area_id_is_omitted() {
+        let payload = json!({
+            "geoFences": [{"id": 1774, "name": "学校", "points": [{"lat": 39.4, "lng": 116.2}]}]
+        });
+        let area = area_from_payload(&payload, &[]);
+        assert_eq!(area.run_area_id, 1774);
+        assert!(area.freedom_show_fence);
     }
 }
