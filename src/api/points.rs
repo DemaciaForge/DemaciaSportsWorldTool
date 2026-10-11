@@ -125,14 +125,62 @@ pub fn fetch_points_context_ext(
 }
 
 fn extract_points(payload: &Value) -> Vec<Value> {
-    let names = ["pointsResModels", "pointResModels", "points", "pointList", "pointsModelList"];
-    find_value_recursive(payload, &names, 8)
+    // Prefer the explicit checkpoint fields.  Some responses also contain
+    // geo-fences with a generic `points` array; walking those fields first
+    // makes the fence vertices look like run checkpoints and breaks the road
+    // preview.
+    let explicit_names = ["pointsResModels", "pointResModels", "pointsModelList"];
+    find_value_recursive(payload, &explicit_names, 8)
+        .or_else(|| find_checkpoint_fallback(payload, 8, false))
         .and_then(|value| match value {
             Value::Array(items) => Some(items),
             Value::String(text) => serde_json::from_str::<Value>(&text).ok().and_then(|v| v.as_array().cloned()),
             _ => None,
         })
         .unwrap_or_default()
+}
+
+fn find_checkpoint_fallback(root: &Value, depth: usize, inside_fence: bool) -> Option<Value> {
+    if depth == 0 {
+        return None;
+    }
+    match root {
+        Value::Object(map) => {
+            let object_is_fence = inside_fence
+                || map.keys().any(|key| {
+                    let key = key.to_ascii_lowercase();
+                    key.contains("geofence") || key == "fences" || key == "fence"
+                });
+            if !object_is_fence {
+                for name in ["pointList", "points"] {
+                    if let Some(value) = map.get(name).filter(|v| !v.is_null()) {
+                        return Some(value.clone());
+                    }
+                }
+            }
+            for (key, value) in map {
+                if let Some(found) =
+                    find_checkpoint_fallback(value, depth - 1, object_is_fence || key.to_ascii_lowercase().contains("fence"))
+                {
+                    return Some(found);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                if let Some(found) = find_checkpoint_fallback(value, depth - 1, inside_fence) {
+                    return Some(found);
+                }
+            }
+        }
+        Value::String(text) => {
+            if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                return find_checkpoint_fallback(&parsed, depth - 1, inside_fence);
+            }
+        }
+        _ => {}
+    }
+    None
 }
 
 /// 在业务响应的多层 data/result/runArea 包装中查找字段。接口版本之间字段
@@ -370,5 +418,28 @@ mod tests {
         let area = area_from_payload(&payload, &[]);
         assert_eq!(area.run_area_id, 1774);
         assert!(area.freedom_show_fence);
+    }
+
+    #[test]
+    fn extract_points_ignores_fence_vertices_before_checkpoint_list() {
+        let payload = json!({
+            "data": {
+                "geoFences": [{
+                    "points": [
+                        {"lat": 39.0, "lon": 116.0},
+                        {"lat": 39.1, "lon": 116.0},
+                        {"lat": 39.1, "lon": 116.1}
+                    ]
+                }],
+                "result": {
+                    "pointsResModels": [
+                        {"lat": 39.2, "lon": 116.2}
+                    ]
+                }
+            }
+        });
+        let points = extract_points(&payload);
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0]["lat"], 39.2);
     }
 }
