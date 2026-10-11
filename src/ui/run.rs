@@ -85,6 +85,8 @@ pub struct RunPage {
     pub track_spec: crate::track::stadium::TrackSpec,
     /// Custom oval measurement-line length, kept as text while editing.
     pub custom_track_length: String,
+    /// 详情页路线颜色模式
+    pub track_color_mode: crate::api::model::TrackColorMode,
     /// 地图视图状态
     pub map: MapState,
     /// 路网预览（真实道路路由）
@@ -470,6 +472,20 @@ impl App {
                     ui.label("100-1000 米");
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label("路线颜色：");
+                ui.radio_value(
+                    &mut page.track_color_mode,
+                    crate::api::model::TrackColorMode::FullGreen,
+                    "全绿色",
+                );
+                ui.radio_value(
+                    &mut page.track_color_mode,
+                    crate::api::model::TrackColorMode::HalfGreenGray,
+                    "灰绿混合",
+                );
+                ui.label("（全绿色可避免详情页出现灰色分段）");
+            });
         }
 
         // 切换到真实道路路由时按需拉取电子围栏与实时点位（经典模式不触发这些端点）。
@@ -799,6 +815,7 @@ impl App {
             }
             spec => spec,
         };
+        let track_color_mode = page.track_color_mode;
         self.config.dist_min = page.dist_min;
         self.config.dist_max = page.dist_max;
         self.config.pace_min = page.pace_min;
@@ -813,6 +830,7 @@ impl App {
             "legacy".into()
         };
         self.config.track_spec = track_spec;
+        self.config.track_color_mode = track_color_mode;
         let _ = crate::api::model::save_config(&self.config);
 
         let identity = self.identity.clone();
@@ -836,6 +854,7 @@ impl App {
                 face_check,
                 manual_altitude,
                 manual_altitude_range,
+                track_color_mode,
                 seed,
                 route_mode,
                 ordinary_pick,

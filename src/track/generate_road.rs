@@ -17,6 +17,7 @@ use super::geom::{
 };
 use super::model::{GenPoint, Segment, TenWindow, Track};
 use super::postfix::apply_post_fixes;
+use crate::api::model::TrackColorMode;
 use route_planner::{
     fatigue_from_km, gait, ou_cadence_series, pace_profile, plan_route_split, point_in_polygon,
     Coord, GpsJitter, KinParams, RoadGraph, Route, RouteOptions, Sdf,
@@ -242,6 +243,28 @@ pub fn build_road(
     must_bd: &[(f64, f64)],
     net: &RoadGraph,
 ) -> Result<Track, String> {
+    build_road_with_color_mode(
+        dist,
+        dur,
+        seed,
+        start_ms,
+        route_bd,
+        must_bd,
+        net,
+        TrackColorMode::FullGreen,
+    )
+}
+
+pub fn build_road_with_color_mode(
+    dist: f64,
+    dur: i64,
+    seed: u64,
+    start_ms: i64,
+    route_bd: &[(f64, f64)],
+    must_bd: &[(f64, f64)],
+    net: &RoadGraph,
+    color_mode: TrackColorMode,
+) -> Result<Track, String> {
     let mut rng = Rng::new(seed);
     let dur_f = dur as f64;
     let avg_v = dist / dur_f;
@@ -299,37 +322,45 @@ pub fn build_road(
     let seg_dist: Vec<f64> = (0..n).map(|i| w[i] * dts[i]).collect();
 
     // 点位类型（同经典模式）
-    let tl_w = [
-        ((-1i64, 4i64), 54u32),
-        ((-1, 1), 27),
-        ((-1, 12), 13),
-        ((-1, 5), 3),
-        ((-1, 6), 2),
-    ];
-    let mut kinds: Vec<(i64, i64)> = Vec::with_capacity(n);
-    for _ in 0..n {
-        let u = rng.random();
-        if u < 0.39 {
-            kinds.push((3, 1));
-        } else if u < 0.93 {
-            kinds.push((0, 1));
-        } else if u < 0.96 {
-            kinds.push(rng.weighted(&tl_w));
-        } else {
-            kinds.push((rng.choice(&[1, 1, 1, 1, 2, 2]), 1));
+    let kinds: Vec<(i64, i64)> = match color_mode {
+        TrackColorMode::FullGreen => vec![(0, 1); n],
+        TrackColorMode::HalfGreenGray => {
+            let tl_w = [
+                ((-1i64, 4i64), 54u32),
+                ((-1, 1), 27),
+                ((-1, 12), 13),
+                ((-1, 5), 3),
+                ((-1, 6), 2),
+            ];
+            let mut kinds: Vec<(i64, i64)> = Vec::with_capacity(n);
+            for _ in 0..n {
+                let u = rng.random();
+                if u < 0.39 {
+                    kinds.push((3, 1));
+                } else if u < 0.93 {
+                    kinds.push((0, 1));
+                } else if u < 0.96 {
+                    kinds.push(rng.weighted(&tl_w));
+                } else {
+                    kinds.push((rng.choice(&[1, 1, 1, 1, 2, 2]), 1));
+                }
+            }
+            for i in 1..kinds.len() {
+                let prev_drift = (-1 == kinds[i - 1].0)
+                    || kinds[i - 1].0 == 5
+                    || kinds[i - 1].0 == 6;
+                if kinds[i].0 != -1 && prev_drift && rng.random() < 0.08 {
+                    kinds[i] = (if rng.random() < 0.75 { 7 } else { 8 }, 1);
+                }
+            }
+            for i in 1..n {
+                if kinds[i].0 == -1 && kinds[i - 1].0 == -1 {
+                    kinds[i] = (rng.choice(&[3, 0]), 1);
+                }
+            }
+            kinds
         }
-    }
-    for i in 1..kinds.len() {
-        let prev_drift = (-1 == kinds[i - 1].0) || kinds[i - 1].0 == 5 || kinds[i - 1].0 == 6;
-        if kinds[i].0 != -1 && prev_drift && rng.random() < 0.08 {
-            kinds[i] = (if rng.random() < 0.75 { 7 } else { 8 }, 1);
-        }
-    }
-    for i in 1..n {
-        if kinds[i].0 == -1 && kinds[i - 1].0 == -1 {
-            kinds[i] = (rng.choice(&[3, 0]), 1);
-        }
-    }
+    };
     let normal_idx: Vec<usize> = (0..n).filter(|&i| kinds[i].0 != -1 && i > 1).collect();
     let share: f64 = normal_idx.iter().map(|&i| seg_dist[i]).sum();
     let share = if share == 0.0 { 1.0 } else { share };
@@ -397,14 +428,18 @@ pub fn build_road(
             x = bx;
             y = by;
             // AR(1) 相关漂移 + 高斯测量噪声，SDF 自适应放大
-            let sc = sdf.sigma_scale([bx, by]);
-            let z = [
-                rng.gauss(0.0, 1.0),
-                rng.gauss(0.0, 1.0),
-                rng.gauss(0.0, 1.0),
-                rng.gauss(0.0, 1.0),
-            ];
-            let (jxd, jyd) = jitter.step(sc, z);
+            let (jxd, jyd) = if color_mode == TrackColorMode::FullGreen {
+                (0.0, 0.0)
+            } else {
+                let sc = sdf.sigma_scale([bx, by]);
+                let z = [
+                    rng.gauss(0.0, 1.0),
+                    rng.gauss(0.0, 1.0),
+                    rng.gauss(0.0, 1.0),
+                    rng.gauss(0.0, 1.0),
+                ];
+                jitter.step(sc, z)
+            };
             px = bx + jxd;
             py = by + jyd;
             rad = round_to(
@@ -415,7 +450,9 @@ pub fn build_road(
                 },
                 2,
             );
-            state = if typ == 0 {
+            state = if color_mode == TrackColorMode::FullGreen {
+                1
+            } else if typ == 0 {
                 rng.weighted(&[(1, 145), (2, 45), (3, 164)])
             } else {
                 rng.weighted(&[(1, 145), (2, 256), (3, 151)])
@@ -547,7 +584,11 @@ pub fn build_road(
             bdA: round_to(alt, 2),
             bdD: round_to(brg, 2),
             bdS: round_to((avg_sp * rng.uniform(0.6, 0.95)).max(0.0), 3),
-            bdG: rng.choice(&[1, 1, 1, -1]),
+            bdG: if color_mode == TrackColorMode::FullGreen {
+                1
+            } else {
+                rng.choice(&[1, 1, 1, -1])
+            },
             count: rng.randint(20, 88),
             dtr: 0.0,
             state,
@@ -590,6 +631,22 @@ pub fn build_road(
     }
 
     apply_post_fixes(&mut locs, &mut rng, start_ms);
+
+    if color_mode == TrackColorMode::FullGreen {
+        let last_index = locs.len().saturating_sub(1);
+        for (i, point) in locs.iter_mut().enumerate() {
+            point.ptype = if i == 1 {
+                5
+            } else if i == last_index {
+                6
+            } else {
+                0
+            };
+            point.locType = 1;
+            point.state = 1;
+            point.bdG = 1;
+        }
+    }
 
     // 点位吸附：<40m 精确落位（全量打卡点，含必经点与普通打卡点）
     for pl in route_bd {

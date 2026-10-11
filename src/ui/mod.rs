@@ -371,6 +371,7 @@ impl App {
                     crate::track::stadium::TrackSpec::Custom { total_m } => total_m.to_string(),
                     _ => "400".into(),
                 },
+                track_color_mode: config.track_color_mode,
                 map: map::MapState::default(),
                 preview: None,
                 preview_stale: true,

@@ -9,7 +9,7 @@ use super::records::fetch_one_record;
 use super::submit::{submit_record, SubmitParams, SubmitResult};
 use crate::location::Coordinate;
 use crate::track::generate_road::RouteMode;
-use crate::track::generator::build as gen_track;
+use crate::track::generator::build_with_color_mode as gen_track;
 use crate::track::wire::{
     build_obs_object, build_obs_object_with_area, five_point_wrapper, five_point_wrapper_with_area,
     obs_keys, validate_five_point_wrapper,
@@ -29,6 +29,8 @@ pub struct RunParams {
     pub manual_altitude: Option<f64>,
     /// 用户手动填写的海拔范围；与单值字段兼容，范围优先。
     pub manual_altitude_range: Option<crate::track::altitude::AltitudeRange>,
+    /// 详情页路线颜色模式。
+    pub track_color_mode: crate::api::model::TrackColorMode,
     pub seed: u64,
     /// 路线算法模式。
     pub route_mode: RouteMode,
@@ -112,6 +114,7 @@ pub fn run_dry_run(params: &RunParams, anchor: Coordinate) -> Result<DryRunSumma
         (anchor.latitude, anchor.longitude),
         params.start_ms,
         &point_coords,
+        params.track_color_mode,
     );
     if let Some(range) = params.manual_altitude_range {
         crate::track::altitude::override_bd_a_range(&mut track, range)?;
@@ -391,6 +394,7 @@ pub fn run_full_flow(
                     (anchor.latitude, anchor.longitude),
                     start_ms,
                     &pts_bd,
+                    params.track_color_mode,
                 )
             } else {
                 match crate::track::generate_road::load_network_path(&cfg.osm_path) {
@@ -419,7 +423,7 @@ pub fn run_full_flow(
                         // 硬点（不含起点）：必经点 + 随机普通点，全部强经过 + <40m 吸附
                         let must_bd: Vec<(f64, f64)> =
                             route_pts.iter().skip(1).copied().collect();
-                        match crate::track::generate_road::build_road(
+                        match crate::track::generate_road::build_road_with_color_mode(
                             params.dist,
                             params.dur,
                             params.seed,
@@ -427,6 +431,7 @@ pub fn run_full_flow(
                             &route_pts,
                             &must_bd,
                             &filtered,
+                            params.track_color_mode,
                         ) {
                             Ok(t) => {
                                 log(&format!(
@@ -446,6 +451,7 @@ pub fn run_full_flow(
                                     (anchor.latitude, anchor.longitude),
                                     start_ms,
                                     &pts_bd,
+                                    params.track_color_mode,
                                 )
                             }
                         }
@@ -459,6 +465,7 @@ pub fn run_full_flow(
                             (anchor.latitude, anchor.longitude),
                             start_ms,
                             &pts_bd,
+                            params.track_color_mode,
                         )
                     }
                 }
@@ -471,6 +478,7 @@ pub fn run_full_flow(
             (anchor.latitude, anchor.longitude),
             start_ms,
             &pts_bd,
+            params.track_color_mode,
         ),
         }
     };
@@ -598,6 +606,7 @@ mod tests {
             face_check: 1,
             manual_altitude: None,
             manual_altitude_range: None,
+            track_color_mode: crate::api::model::TrackColorMode::FullGreen,
             seed: 7,
             route_mode: RouteMode::Legacy,
             ordinary_pick: 0,
