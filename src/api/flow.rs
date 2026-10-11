@@ -65,11 +65,25 @@ pub fn run_full_flow(
     }
     let anchor: Coordinate = client.identity.anchor_coordinate()?;
     let points_ctx = points::fetch_points_context(client, anchor, log)?;
+    let mut area = points_ctx.area.clone();
+    // 部分学校把围栏放在策略响应，另一些学校放在点位响应；优先使用
+    // 明确返回的有效围栏，两个接口都没有时保持自由跑默认值。
+    if pol.area.freedom_show_fence && pol.area.geo_fences_json.trim() != "[]" {
+        area = pol.area.clone();
+    } else if area.run_area_id < 0 && pol.area.run_area_id >= 0 {
+        area.run_area_id = pol.area.run_area_id;
+    }
     let pts = points_ctx.points.clone();
     if pts.is_empty() {
         return Err("实时点位为空 —— 拒绝本地样本兜底".into());
     }
-    log(&format!("√ [points] {} 个点位", pts.len()));
+    log(&format!(
+        "√ [points] {} 个点位，runAreaId={}，绿色围栏={}（{} 字节）",
+        pts.len(),
+        area.run_area_id,
+        area.freedom_show_fence,
+        area.geo_fences_json.len(),
+    ));
     for p in pts.iter().take(5) {
         log(&format!(
             "  [points] {} BD=({:.6},{:.6}) GCJ=({},{})",
@@ -138,7 +152,7 @@ pub fn run_full_flow(
         }
         // 用漂移后的新锚点重存点位缓存，使缓存锚点与持久化锚点一致，避免预览锚点失配。
         if let Ok(new_anchor) = client.identity.anchor_coordinate() {
-            let _ = super::model::save_points_cache(new_anchor, &pts);
+            let _ = super::model::save_points_cache_context(new_anchor, &pts, &area);
         }
     }
     // 平均配速须落在有效窗口内（否则逐点速度无法全窗内），越界时修正时长
@@ -282,7 +296,7 @@ pub fn run_full_flow(
     ));
 
     // ④ 五点 wrapper（跑完态）
-    let five = five_point_wrapper_with_area(&pts, track.startTime, &points_ctx.area);
+    let five = five_point_wrapper_with_area(&pts, track.startTime, &area);
     let _ = &five;
 
     // ⑤ 提交（sportType=1）
@@ -307,7 +321,7 @@ pub fn run_full_flow(
     // 从提交结果回填 track.startTime（含随机秒偏移），保证 body/OBS/flag 全链一致
     let mut track_for_obs = sp.track.clone();
     track_for_obs.startTime = result.start_ms;
-    let obj = build_obs_object_with_area(&track_for_obs, result.rrid, &result.uuid, sess.uid, &pts, &points_ctx.area);
+    let obj = build_obs_object_with_area(&track_for_obs, result.rrid, &result.uuid, sess.uid, &pts, &area);
     let payload = obj.to_string().into_bytes();
     let keys = obs_keys(&track_for_obs, result.rrid, &result.uuid);
     let obs_ok = super::obs::upload_both_keys(client, &keys, &payload, log);

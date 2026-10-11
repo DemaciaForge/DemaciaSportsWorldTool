@@ -157,6 +157,41 @@ pub fn validate_five_point_wrapper(wrapper: &str) -> Result<(), String> {
         crate::location::Coordinate::new(lat, lon, 0.0)?;
         crate::location::Coordinate::new(glat, glon, 0.0)?;
     }
+    validate_fence_metadata(&outer)?;
+    Ok(())
+}
+
+/// 围栏是学校能力差异字段：没有围栏时允许自由跑提交；如果服务端
+/// 返回了围栏，则保持完整元数据并拒绝损坏或隐藏的围栏，避免详情页误显示。
+fn validate_fence_metadata(outer: &Value) -> Result<(), String> {
+    let Some(value) = outer.get("geoFencesJson") else {
+        return Ok(())
+    };
+    let parsed = match value {
+        Value::Null => return Ok(()),
+        Value::String(text) if text.trim().is_empty() => return Ok(()),
+        Value::String(text) => serde_json::from_str::<Value>(text)
+            .map_err(|e| format!("五点轨迹围栏 JSON 无效: {e}"))?,
+        other => other.clone(),
+    };
+    let has_fences = match parsed {
+        Value::Null => false,
+        Value::Array(items) => !items.is_empty(),
+        _ => return Err("五点轨迹围栏必须是数组".into()),
+    };
+    if !has_fences {
+        return Ok(())
+    }
+    let run_area_id = outer
+        .get("runAreaId")
+        .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
+        .unwrap_or(-1);
+    if run_area_id < -1 {
+        return Err("五点轨迹 runAreaId 无效".into());
+    }
+    if outer.get("freedomShowFence").and_then(Value::as_bool) != Some(true) {
+        return Err("五点轨迹围栏元数据未启用".into());
+    }
     Ok(())
 }
 
@@ -164,6 +199,36 @@ pub fn validate_five_point_wrapper(wrapper: &str) -> Result<(), String> {
 mod validation_tests {
     use super::*;
     #[test] fn rejects_empty_or_malformed_five_point_payload() { assert!(validate_five_point_wrapper("{}").is_err()); assert!(validate_five_point_wrapper(r#"{"fivePointJson":"[]"}"#).is_err()); }
+
+    fn wrapper_without_fence() -> Value {
+        json!({"fivePointJson": r#"[{"lat":39.4,"lon":116.2,"glat":39.4,"glon":116.2}]"#})
+    }
+
+    #[test]
+    fn fence_metadata_is_optional() {
+        assert!(validate_five_point_wrapper(&wrapper_without_fence().to_string()).is_ok());
+        let mut empty = wrapper_without_fence();
+        empty["runAreaId"] = json!(-1);
+        empty["geoFencesJson"] = json!("[]");
+        empty["freedomShowFence"] = json!(false);
+        assert!(validate_five_point_wrapper(&empty.to_string()).is_ok());
+    }
+
+    #[test]
+    fn valid_fence_metadata_is_kept_but_invalid_present_metadata_is_rejected() {
+        let mut valid = wrapper_without_fence();
+        valid["geoFencesJson"] = json!(r#"[{"id":1}]"#);
+        valid["freedomShowFence"] = json!(true);
+        assert!(validate_five_point_wrapper(&valid.to_string()).is_ok());
+
+        let mut hidden = valid.clone();
+        hidden["freedomShowFence"] = json!(false);
+        assert!(validate_five_point_wrapper(&hidden.to_string()).is_err());
+
+        let mut malformed = valid;
+        malformed["geoFencesJson"] = json!("not-json");
+        assert!(validate_five_point_wrapper(&malformed.to_string()).is_err());
+    }
 
     #[test]
     fn area_metadata_is_written_to_fixed_point_wrapper() {

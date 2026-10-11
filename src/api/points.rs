@@ -59,8 +59,7 @@ pub fn fetch_points_context_ext(
     anchor.validate()?;
     // ① TTL 内命中缓存直接返回
     if let Some((ts, pts, area)) = model::load_points_cache_context_for(anchor) {
-        if !pts.is_empty()
-            && crate::crypto::envelope::now_ms() - ts < model::POINTS_TTL_MS
+        if !pts.is_empty() && crate::crypto::envelope::now_ms() - ts < model::POINTS_TTL_MS
         {
             log(&format!("[points] 缓存命中（{} 秒前，{} 点）", (crate::crypto::envelope::now_ms() - ts) / 1000, pts.len()));
             return Ok(PointsContext { points: pts, area });
@@ -110,11 +109,8 @@ pub fn fetch_points_context_ext(
         return fallback(log);
     };
     let payload = &dec.business;
-    // pointsResModels：优先顶层，其次 data 子对象
-    let pts: Vec<Value> = super::client::get_field(payload, "pointsResModels")
-        .and_then(|m| m.as_array())
-        .cloned()
-        .unwrap_or_default();
+    // pointsResModels 在不同版本接口中可能位于 data/result，甚至被编码成 JSON 字符串。
+    let pts = extract_points(payload);
     if !pts.is_empty() {
         let area = area_from_payload(payload, &pts);
         let _ = model::save_points_cache_context(anchor, &pts, &area);
@@ -128,43 +124,168 @@ pub fn fetch_points_context_ext(
     fallback(log)
 }
 
-fn area_from_payload(payload: &Value, points: &[Value]) -> crate::track::wire::RunAreaMeta {
-    let first_point = points.first().unwrap_or(&Value::Null);
-    let lookup = |names: &[&str]| -> Option<&Value> {
-        names.iter()
-            .find_map(|name| super::client::get_field(payload, name))
-            .or_else(|| names.iter().find_map(|name| first_point.get(*name)))
-    };
-    let run_area_id = lookup(&["runAreaId", "runAreaID", "areaId"])
-        .and_then(value_as_i64)
-        .unwrap_or(-1);
-    let geo_fences_json = lookup(&["geoFencesJson", "geoFences", "geoFenceJson", "fences"])
-        .map(value_as_json_string)
-        .filter(|value| !value.trim().is_empty() && value.trim() != "null")
-        .unwrap_or_else(|| "[]".into());
-    let freedom_show_fence = lookup(&["freedomShowFence", "showFence"])
-        .and_then(Value::as_bool)
-        .unwrap_or(run_area_id >= 0 && geo_fences_json.trim() != "[]");
-    crate::track::wire::RunAreaMeta {
-        run_area_id,
-        geo_fences_json,
-        freedom_show_fence,
+fn extract_points(payload: &Value) -> Vec<Value> {
+    let names = ["pointsResModels", "pointResModels", "points", "pointList", "pointsModelList"];
+    find_value_recursive(payload, &names, 8)
+        .and_then(|value| match value {
+            Value::Array(items) => Some(items),
+            Value::String(text) => serde_json::from_str::<Value>(&text).ok().and_then(|v| v.as_array().cloned()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// 在业务响应的多层 data/result/runArea 包装中查找字段。接口版本之间字段
+/// 的层级不同，不能只读取顶层，否则围栏会被丢掉而详情页只显示灰线。
+fn find_value_recursive(root: &Value, names: &[&str], depth: usize) -> Option<Value> {
+    if depth == 0 { return None; }
+    match root {
+        Value::Object(map) => {
+            for name in names {
+                if let Some(value) = map.get(*name).filter(|v| !v.is_null()) {
+                    return Some(value.clone());
+                }
+            }
+            for value in map.values() {
+                if let Some(found) = find_value_recursive(value, names, depth - 1) { return Some(found); }
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                if let Some(found) = find_value_recursive(value, names, depth - 1) { return Some(found); }
+            }
+        }
+        Value::String(text) => {
+            if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                return find_value_recursive(&parsed, names, depth - 1);
+            }
+        }
+        _ => {}
     }
+    None
+}
+
+pub(crate) fn area_from_payload(payload: &Value, points: &[Value]) -> crate::track::wire::RunAreaMeta {
+    let id_names = ["runAreaId", "runAreaID", "areaId", "areaID", "runId"];
+    let fence_names = [
+        "geoFencesJson", "geoFenceJson", "geoFences", "geoFence", "geoFenceList",
+        "fenceList", "fences", "runAreaGeoFences", "runAreaFence",
+    ];
+    let show_names = ["freedomShowFence", "showFence", "showGeoFence", "isShowFence"];
+    let mut run_area_id = find_nonnegative_field(payload, &id_names, 8)
+        .or_else(|| find_value_recursive(payload, &["runArea", "runAreaInfo"], 8)
+            .and_then(|value| value_as_i64(&value)).filter(|id| *id >= 0));
+    let mut fences = find_value_recursive(payload, &fence_names, 8)
+        .filter(|value| usable_fence(value));
+    let mut show = find_true_field(payload, &show_names, 8)
+        .or_else(|| find_value_recursive(payload, &show_names, 8));
+    for point in points {
+        if run_area_id.is_none() { run_area_id = find_nonnegative_field(point, &id_names, 3); }
+        if fences.is_none() { fences = find_value_recursive(point, &fence_names, 3).filter(usable_fence); }
+        if show.is_none() { show = find_true_field(point, &show_names, 3).or_else(|| find_value_recursive(point, &show_names, 3)); }
+    }
+    let run_area_id = run_area_id.unwrap_or(-1);
+    let geo_fences_json = fences.as_ref()
+        .map(value_as_json_string)
+        .filter(|value| !value.trim().is_empty() && value.trim() != "null" && value.trim() != "[]")
+        .unwrap_or_else(|| "[]".into());
+    let freedom_show_fence = show.as_ref()
+        .and_then(value_as_bool)
+        .unwrap_or(geo_fences_json.trim() != "[]");
+    crate::track::wire::RunAreaMeta { run_area_id, geo_fences_json, freedom_show_fence }
 }
 
 fn value_as_i64(value: &Value) -> Option<i64> {
     value.as_i64()
         .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+        .or_else(|| value.as_f64().filter(|n| n.is_finite()).map(|n| n as i64))
         .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        .or_else(|| value.get("id").and_then(value_as_i64))
+        .or_else(|| value.get("runAreaId").and_then(value_as_i64))
+}
+
+fn value_as_bool(value: &Value) -> Option<bool> {
+    value.as_bool()
+        .or_else(|| value.as_i64().map(|n| n != 0))
+        .or_else(|| value.as_str().and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => Some(true),
+            "false" | "0" | "no" => Some(false),
+            _ => None,
+        }))
+}
+
+fn usable_fence(value: &Value) -> bool {
+    let text = value_as_json_string(value);
+    serde_json::from_str::<Value>(text.trim()).ok()
+        .is_some_and(|parsed| matches!(parsed, Value::Array(items) if !items.is_empty()))
+}
+
+fn find_true_field(root: &Value, names: &[&str], depth: usize) -> Option<Value> {
+    if depth == 0 { return None; }
+    match root {
+        Value::Object(map) => {
+            for name in names {
+                if let Some(value) = map.get(*name).filter(|value| value_as_bool(value) == Some(true)) {
+                    return Some(value.clone());
+                }
+            }
+            for value in map.values() {
+                if let Some(found) = find_true_field(value, names, depth - 1) { return Some(found); }
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                if let Some(found) = find_true_field(value, names, depth - 1) { return Some(found); }
+            }
+        }
+        Value::String(text) => {
+            if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                return find_true_field(&parsed, names, depth - 1);
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+fn find_nonnegative_field(root: &Value, names: &[&str], depth: usize) -> Option<i64> {
+    if depth == 0 { return None; }
+    match root {
+        Value::Object(map) => {
+            for name in names {
+                if let Some(id) = map.get(*name).and_then(value_as_i64).filter(|id| *id >= 0) {
+                    return Some(id);
+                }
+            }
+            for value in map.values() {
+                if let Some(found) = find_nonnegative_field(value, names, depth - 1) { return Some(found); }
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                if let Some(found) = find_nonnegative_field(value, names, depth - 1) { return Some(found); }
+            }
+        }
+        Value::String(text) => {
+            if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                return find_nonnegative_field(&parsed, names, depth - 1);
+            }
+        }
+        _ => {}
+    }
+    None
 }
 
 fn value_as_json_string(value: &Value) -> String {
     match value {
-        Value::String(text) => text.clone(),
+        Value::String(text) => {
+            serde_json::from_str::<Value>(text).map(|v| v.to_string()).unwrap_or_else(|_| text.clone())
+        }
         Value::Null => "[]".into(),
         other => other.to_string(),
     }
 }
+
 
 /// 点位中心（BD 系）。
 #[allow(dead_code)]
@@ -210,5 +331,15 @@ mod tests {
         let area = area_from_payload(&Value::Null, &points);
         assert_eq!(area.run_area_id, 7);
         assert!(!area.freedom_show_fence);
+    }
+
+    #[test]
+    fn area_metadata_reads_nested_json_without_fabricating_fence() {
+        let payload = json!({"data": "{\"result\": {\"runArea\": {\"id\": 9}, \"pointsResModels\": [{\"lat\": 1.0, \"lon\": 2.0}]}}"});
+        let points = vec![json!({"lat": 1.0, "lon": 2.0}), json!({"lat": 1.1, "lon": 2.0}), json!({"lat": 1.1, "lon": 2.1})];
+        let area = area_from_payload(&payload, &points);
+        assert_eq!(area.run_area_id, 9);
+        assert!(!area.freedom_show_fence);
+        assert_eq!(area.geo_fences_json, "[]");
     }
 }
