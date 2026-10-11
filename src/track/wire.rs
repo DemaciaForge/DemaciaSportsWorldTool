@@ -15,6 +15,28 @@ use super::model::{GenPoint, Track};
 
 const X_PI: f64 = std::f64::consts::PI * 3000.0 / 180.0;
 
+/// The run-area metadata returned by the point endpoint.
+///
+/// Older callers can keep using the default value (free-run semantics), while
+/// campus runs pass through the server-provided area id and fence JSON so the
+/// record detail page can draw the same green boundary as the official app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunAreaMeta {
+    pub run_area_id: i64,
+    pub geo_fences_json: String,
+    pub freedom_show_fence: bool,
+}
+
+impl Default for RunAreaMeta {
+    fn default() -> Self {
+        Self {
+            run_area_id: -1,
+            geo_fences_json: "[]".into(),
+            freedom_show_fence: false,
+        }
+    }
+}
+
 /// 百度 BD-09 → 高德 GCJ-02。
 pub fn bd09_to_gcj02(bd_lat: f64, bd_lng: f64) -> (f64, f64) {
     let x = bd_lng - 0.0065;
@@ -99,13 +121,23 @@ pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
 
 /// 提交 body 的 fivePointJson 包装串。
 pub fn five_point_wrapper(points: &[Value], start_ms: i64) -> String {
+    five_point_wrapper_with_area(points, start_ms, &RunAreaMeta::default())
+}
+
+/// Build the fixed-point wrapper while preserving the server's campus area
+/// and geofence metadata.
+pub fn five_point_wrapper_with_area(
+    points: &[Value],
+    start_ms: i64,
+    area: &RunAreaMeta,
+) -> String {
     let five = five_point_payload(points, start_ms);
     json!({
         "useZip": false,
         "fivePointJson": Value::Array(five).to_string(),
-        "runAreaId": -1,
-        "geoFencesJson": "[]",
-        "freedomShowFence": false,
+        "runAreaId": area.run_area_id,
+        "geoFencesJson": area.geo_fences_json,
+        "freedomShowFence": area.freedom_show_fence,
     })
     .to_string()
 }
@@ -132,6 +164,16 @@ pub fn validate_five_point_wrapper(wrapper: &str) -> Result<(), String> {
 mod validation_tests {
     use super::*;
     #[test] fn rejects_empty_or_malformed_five_point_payload() { assert!(validate_five_point_wrapper("{}").is_err()); assert!(validate_five_point_wrapper(r#"{"fivePointJson":"[]"}"#).is_err()); }
+
+    #[test]
+    fn area_metadata_is_written_to_fixed_point_wrapper() {
+        let area = RunAreaMeta { run_area_id: 42, geo_fences_json: "[{\"x\":1}]".into(), freedom_show_fence: true };
+        let wrapper = five_point_wrapper_with_area(&[json!({"lat": 39.9, "lon": 116.4, "glat": 39.9, "glon": 116.4})], 1_700_000_000_000, &area);
+        let value: Value = serde_json::from_str(&wrapper).unwrap();
+        assert_eq!(value["runAreaId"], 42);
+        assert_eq!(value["geoFencesJson"], "[{\"x\":1}]");
+        assert_eq!(value["freedomShowFence"], true);
+    }
 
     #[test]
     fn laps_are_rebuilt_from_overridden_altitude() {
@@ -244,6 +286,18 @@ pub fn build_obs_object(
     uid: i64,
     live_points: &[Value],
 ) -> Value {
+    build_obs_object_with_area(track, rrid, uuid, uid, live_points, &RunAreaMeta::default())
+}
+
+/// Build the OBS payload with the same area metadata used by submission.
+pub fn build_obs_object_with_area(
+    track: &Track,
+    rrid: i64,
+    uuid: &str,
+    uid: i64,
+    live_points: &[Value],
+    area: &RunAreaMeta,
+) -> Value {
     let start_ms = track.startTime;
     let pts: Vec<Value> = track.locations.iter().map(|p| conv_point(p, start_ms)).collect();
     let run_wrap = json!({ "allLocJson": Value::Array(pts).to_string(), "useZip": false });
@@ -252,9 +306,9 @@ pub fn build_obs_object(
     let five = five_point_payload(live_points, start_ms);
     let fx = json!({
         "fivePointJson": Value::Array(five).to_string(),
-        "freedomShowFence": false,
-        "geoFencesJson": "[]",
-        "runAreaId": -1,
+        "freedomShowFence": area.freedom_show_fence,
+        "geoFencesJson": area.geo_fences_json,
+        "runAreaId": area.run_area_id,
         "useZip": false,
     });
     json!({

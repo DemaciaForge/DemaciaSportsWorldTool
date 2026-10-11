@@ -1,4 +1,4 @@
-//! 固定在主界面上的开源署名与防倒卖水印。
+//! 主界面状态栏上方的开源信息水印。
 
 use eframe::egui;
 
@@ -8,11 +8,13 @@ const REPOSITORY_URL: &str = "https://github.com/YanamiNeko/NekoSportsWorldTool"
 const CONTRIBUTORS_URL: &str =
     "https://github.com/YanamiNeko/NekoSportsWorldTool/graphs/contributors";
 
-/// 在状态栏上方绘制固定水印，避免影响页面内容和输入控件。
-pub fn draw(ctx: &egui::Context) {
+/// 在状态栏上方绘制水印，底边跟随状态栏实际位置，避免遮挡页面控件。
+pub fn draw(ctx: &egui::Context, status_bar_rect: egui::Rect) {
+    let screen_rect = ctx.screen_rect();
+    let status_bar_offset = -(screen_rect.bottom() - status_bar_rect.top());
     egui::Area::new(egui::Id::new("anti_resale_watermark"))
         .order(egui::Order::Foreground)
-        .anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, -42.0])
+        .anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, status_bar_offset])
         .interactable(false)
         .show(ctx, |ui| {
             egui::Frame::none()
@@ -26,51 +28,34 @@ pub fn draw(ctx: &egui::Context) {
                 .show(ui, |ui| {
                     ui.set_max_width(320.0);
                     ui.label(
-                        egui::RichText::new("本项目完全开源 · 完全免费")
+                        egui::RichText::new("本项目免费提供，禁止违反许可证规定进行商业使用。")
                             .small()
                             .strong()
                             .color(theme::text_dim()),
                     );
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(
-                                "主要贡献者（公开记录）：YanamiNeko、laotierocket、hb-degithub、Yunlk、DemaciaForge（德玛西亚）",
-                            )
-                            .small()
-                            .color(theme::text_dim()),
-                        )
-                        .wrap(),
-                    );
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new("如果您是付费的，请向售卖者提出退款")
+                            egui::RichText::new("如果您通过付费渠道获得本软件，请联系售卖者。")
                                 .small()
                                 .color(theme::warn()),
                         )
                         .wrap(),
                     );
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(
-                                "GitHub 开源项目：YanamiNeko/NekoSportsWorldTool",
-                            )
-                            .small()
-                            .color(theme::text_dim()),
-                        )
-                        .wrap(),
-                    );
-                    ui.hyperlink_to(
-                        egui::RichText::new("打开项目主页")
-                            .small()
-                            .color(theme::text_dim()),
-                        REPOSITORY_URL,
-                    );
-                    ui.hyperlink_to(
-                        egui::RichText::new("查看公开贡献者记录")
-                            .small()
-                            .color(theme::text_dim()),
-                        CONTRIBUTORS_URL,
-                    );
+                    ui.horizontal_wrapped(|ui| {
+                        ui.hyperlink_to(
+                            egui::RichText::new("GitHub 项目主页")
+                                .small()
+                                .color(theme::text_dim()),
+                            REPOSITORY_URL,
+                        );
+                        ui.label(egui::RichText::new("|").small().color(theme::text_dim()));
+                        ui.hyperlink_to(
+                            egui::RichText::new("查看贡献者")
+                                .small()
+                                .color(theme::text_dim()),
+                            CONTRIBUTORS_URL,
+                        );
+                    });
                 });
         });
 }

@@ -213,7 +213,7 @@ impl eframe::App for App {
         });
 
         // ── 底部状态栏 ──────────────────────────────────────────
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+        let status_bar_rect = egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(format!("日志 {} 行", self.log.len()));
@@ -262,7 +262,7 @@ impl eframe::App for App {
                 });
             });
             ui.add_space(2.0);
-        });
+        }).response.rect;
 
         // ── 标签页 ──────────────────────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -281,7 +281,7 @@ impl eframe::App for App {
             }
         });
 
-        watermark::draw(ctx);
+        watermark::draw(ctx, status_bar_rect);
 
         if let Some(p) = &self.popup {
             let mut open = true;
