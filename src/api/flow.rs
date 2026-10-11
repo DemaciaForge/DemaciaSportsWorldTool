@@ -73,6 +73,27 @@ pub fn run_full_flow(
     } else if area.run_area_id < 0 && pol.area.run_area_id >= 0 {
         area.run_area_id = pol.area.run_area_id;
     }
+    // 某些学校不在策略/点位响应中返回围栏，而是只由独立围栏接口提供。
+    // 围栏是可选能力：接口失败或返回空数组时继续按自由跑提交。
+    let mut prefetched_fences: Option<Vec<Vec<(f64, f64)>>> = None;
+    if !area.freedom_show_fence || area.geo_fences_json.trim() == "[]" {
+        match crate::api::fence::fetch_geo_fence_with_area(client) {
+            Ok(response) => {
+                if response.area.freedom_show_fence && response.area.geo_fences_json.trim() != "[]" {
+                    area = response.area;
+                    log(&format!(
+                        "√ [fence] 独立接口返回绿色围栏 runAreaId={}（{} 字节）",
+                        area.run_area_id,
+                        area.geo_fences_json.len(),
+                    ));
+                } else {
+                    log("[fence] 独立接口未返回可用围栏，继续自由跑");
+                }
+                prefetched_fences = Some(response.polygons);
+            }
+            Err(e) => log(&format!("⚠ [fence] 独立接口获取失败，继续自由跑: {e}")),
+        }
+    }
     let pts = points_ctx.points.clone();
     if pts.is_empty() {
         return Err("实时点位为空 —— 拒绝本地样本兜底".into());
@@ -198,16 +219,23 @@ pub fn run_full_flow(
                     Ok(mut net) => {
                         crate::track::generate_road::align_network(&mut net);
                         // 电子围栏：裁剪到围栏内道路（失败/无围栏则跳过）
-                        let fences = match crate::api::fence::fetch_geo_fence(client) {
-                            Ok(f) => {
+                        let fences = match prefetched_fences.take() {
+                            Some(f) => {
                                 let _ = crate::api::model::save_fence_cache(&f);
                                 log(&format!("√ [track] 电子围栏 {} 个", f.len()));
                                 f
                             }
-                            Err(e) => {
-                                log(&format!("⚠ [track] 围栏获取失败，回退缓存: {e}"));
-                                crate::api::model::load_fence_cache().unwrap_or_default()
-                            }
+                            None => match crate::api::fence::fetch_geo_fence(client) {
+                                Ok(f) => {
+                                    let _ = crate::api::model::save_fence_cache(&f);
+                                    log(&format!("√ [track] 电子围栏 {} 个", f.len()));
+                                    f
+                                }
+                                Err(e) => {
+                                    log(&format!("⚠ [track] 围栏获取失败，回退缓存: {e}"));
+                                    crate::api::model::load_fence_cache().unwrap_or_default()
+                                }
+                            },
                         };
                         let filtered = crate::track::generate_road::apply_fences(&net, &fences);
                         // 强制必经点（不含起点）：其余打卡点仅软引导 + <40m 吸附

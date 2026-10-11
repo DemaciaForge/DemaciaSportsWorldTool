@@ -10,13 +10,31 @@ use serde_json::{json, Value};
 
 pub const FENCE_PATH: &str = "/api/v1/getGeoFenceForRun";
 
+pub struct GeoFenceResponse {
+    pub polygons: Vec<Vec<(f64, f64)>>,
+    pub area: crate::track::wire::RunAreaMeta,
+}
+
 /// 拉取围栏多边形列表（每个围栏一个闭合环，(lat, lon)，BD-09）。
 pub fn fetch_geo_fence(client: &mut ApiClient) -> Result<Vec<Vec<(f64, f64)>>, String> {
+    Ok(fetch_geo_fence_with_area(client)?.polygons)
+}
+
+/// 拉取围栏并保留服务端原始元数据，供 fixed_point_json/OBS 回显绿色边界。
+pub fn fetch_geo_fence_with_area(client: &mut ApiClient) -> Result<GeoFenceResponse, String> {
     let body = json!({ "geoFenceUpdateTime": 0 }).to_string();
     let biz = client.call("POST", FENCE_PATH, &body, &[])?;
     let fences = get_field(&biz, "geoFences")
-        .and_then(|v| v.as_array())
         .cloned()
+        .or_else(|| {
+            let data = super::client::parse_data_field(&biz);
+            data.get("geoFences").cloned()
+        })
+        .and_then(|value| match value {
+            Value::Array(items) => Some(items),
+            Value::String(text) => serde_json::from_str(&text).ok(),
+            _ => None,
+        })
         .unwrap_or_default();
 
     let mut out: Vec<Vec<(f64, f64)>> = Vec::new();
@@ -33,7 +51,11 @@ pub fn fetch_geo_fence(client: &mut ApiClient) -> Result<Vec<Vec<(f64, f64)>>, S
             out.push(ring);
         }
     }
-    Ok(out)
+    let area = crate::api::points::area_from_payload(&biz, &[]);
+    Ok(GeoFenceResponse {
+        polygons: out,
+        area,
+    })
 }
 
 /// 取一个点的 (lat, lon)（BD-09）。优先 lat/lon，缺失或全 0 时回退 glat/glon（GCJ→BD）。
