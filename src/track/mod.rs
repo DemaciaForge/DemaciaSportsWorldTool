@@ -11,7 +11,7 @@ pub mod wire;
 
 #[cfg(test)]
 mod tests {
-    use super::generate_road::build_road;
+    use super::generate_road::{build_road, select_route_points, DEFAULT_ORDINARY_PICK};
     use super::generator::build;
     use super::geom::{MET_PER_DEG_LAT, MET_PER_DEG_LNG};
 
@@ -105,6 +105,49 @@ mod tests {
             }
         }
         assert!(exception_count > 0, "test track should exercise exception points");
+    }
+
+    /// 选点：必经点全选 + 普通点恰好取 pick 个，seed 可复现，不足则全取。
+    #[test]
+    fn test_select_route_points() {
+        let fixed = vec![(1.0, 1.0)];
+        let ordinary = vec![(2.0, 2.0), (3.0, 3.0), (4.0, 4.0), (5.0, 5.0)];
+        let sel = select_route_points(&fixed, &ordinary, 42, DEFAULT_ORDINARY_PICK);
+        assert_eq!(sel.len(), 1 + DEFAULT_ORDINARY_PICK, "sel={sel:?}");
+        assert!(sel.contains(&(1.0, 1.0)), "必经点必须入选");
+        // 同 seed 可复现
+        assert_eq!(
+            sel,
+            select_route_points(&fixed, &ordinary, 42, DEFAULT_ORDINARY_PICK)
+        );
+        // pick 可变：取 3 个普通点
+        assert_eq!(
+            select_route_points(&fixed, &ordinary, 42, 3).len(),
+            4,
+            "pick=3 应含必经 + 3 普通"
+        );
+        // 普通点不足：有几个取几个
+        let few = select_route_points(&fixed, &[(9.0, 9.0)], 1, DEFAULT_ORDINARY_PICK);
+        assert_eq!(few.len(), 2);
+        // fixed 与 ordinary 重叠时去重，不重复
+        let overlap =
+            select_route_points(&[(1.0, 1.0)], &[(1.0, 1.0), (2.0, 2.0)], 7, DEFAULT_ORDINARY_PICK);
+        assert_eq!(overlap.len(), 2);
+    }
+
+    /// 点位数分类：isFixed 字段决定必经/普通。
+    #[test]
+    fn test_points_fixed_free_split() {
+        let pts = vec![
+            serde_json::json!({"lat": 1.0, "lon": 1.0, "isFixed": 1}),
+            serde_json::json!({"lat": 2.0, "lon": 2.0, "isFixed": 0}),
+            serde_json::json!({"lat": 3.0, "lon": 3.0}),
+        ];
+        assert_eq!(crate::api::points::points_fixed(&pts), vec![(1.0, 1.0)]);
+        assert_eq!(
+            crate::api::points::points_free(&pts),
+            vec![(2.0, 2.0), (3.0, 3.0)]
+        );
     }
 
     /// 模式 B（真实道路路由）：距离精确、哨兵/断崖语义与模式 A 一致。

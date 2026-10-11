@@ -80,10 +80,17 @@ pub struct Config {
     /// 路线算法：legacy | road。
     #[serde(default = "default_route_mode")]
     pub route_mode: String,
+    /// 真实道路模式随机选中的普通打卡点数量（运行时可变）。
+    #[serde(default = "default_ordinary_pick")]
+    pub ordinary_pick: usize,
 }
 
 fn default_route_mode() -> String {
     "legacy".into()
+}
+
+fn default_ordinary_pick() -> usize {
+    crate::track::generate_road::DEFAULT_ORDINARY_PICK
 }
 
 fn default_f32() -> f32 {
@@ -123,6 +130,7 @@ impl Default for Config {
             update_check: default_update_check(),
             osm_path: String::new(),
             route_mode: default_route_mode(),
+            ordinary_pick: default_ordinary_pick(),
         }
     }
 }
