@@ -175,6 +175,7 @@ fn cmd_run(rest: &[&str]) -> i32 {
         seed,
         route_mode,
         ordinary_pick,
+        track_spec: cfg.track_spec,
     };
 
     if dry_run {

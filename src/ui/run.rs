@@ -81,6 +81,10 @@ pub struct RunPage {
     pub route_mode: RouteMode,
     /// 真实道路模式随机选中的普通打卡点数量（运行时可调）
     pub ordinary_pick: i64,
+    /// Standard athletics-track preset; Auto preserves the selected route mode.
+    pub track_spec: crate::track::stadium::TrackSpec,
+    /// Custom oval measurement-line length, kept as text while editing.
+    pub custom_track_length: String,
     /// 地图视图状态
     pub map: MapState,
     /// 路网预览（真实道路路由）
@@ -418,6 +422,54 @@ impl App {
                     }
                 });
             }
+            mobile::row(ui, |ui| {
+                ui.label("操场规格：");
+                egui::ComboBox::from_id_salt("run_track_spec")
+                    .width(180.0)
+                    .selected_text(match page.track_spec {
+                        crate::track::stadium::TrackSpec::Custom { total_m } => {
+                            format!("自定义 {total_m} 米")
+                        }
+                        spec => spec.label().to_string(),
+                    })
+                    .show_ui(ui, |ui| {
+                        for spec in [
+                            crate::track::stadium::TrackSpec::Auto,
+                            crate::track::stadium::TrackSpec::M200,
+                            crate::track::stadium::TrackSpec::M300,
+                            crate::track::stadium::TrackSpec::M400,
+                        ] {
+                            ui.selectable_value(&mut page.track_spec, spec, spec.label());
+                        }
+                        let custom_length = page
+                            .custom_track_length
+                            .parse::<u32>()
+                            .ok()
+                            .filter(|length| (100..=1000).contains(length))
+                            .unwrap_or(400);
+                        ui.selectable_value(
+                            &mut page.track_spec,
+                            crate::track::stadium::TrackSpec::Custom {
+                                total_m: custom_length,
+                            },
+                            format!("自定义 {custom_length} 米"),
+                        );
+                    });
+                if matches!(
+                    page.track_spec,
+                    crate::track::stadium::TrackSpec::Custom { .. }
+                ) {
+                    ui.label("长度");
+                    mobile::text_edit(
+                        ui,
+                        "run_custom_track_length",
+                        &mut page.custom_track_length,
+                        crate::platform::InputKind::Text,
+                        70.0,
+                    );
+                    ui.label("100-1000 米");
+                }
+            });
         }
 
         // 切换到真实道路路由时按需拉取电子围栏与实时点位（经典模式不触发这些端点）。
@@ -731,6 +783,21 @@ impl App {
         let face_check = if page.face_check { 1 } else { 0 };
         let route_mode = page.route_mode;
         let ordinary_pick = page.ordinary_pick.max(0) as usize;
+        let track_spec = match page.track_spec {
+            crate::track::stadium::TrackSpec::Custom { .. } => {
+                let Some(total_m) = page
+                    .custom_track_length
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|length| (100..=1000).contains(length))
+                else {
+                    self.status = "自定义操场长度必须是 100-1000 米的整数".into();
+                    return;
+                };
+                crate::track::stadium::TrackSpec::Custom { total_m }
+            }
+            spec => spec,
+        };
         self.config.dist_min = page.dist_min;
         self.config.dist_max = page.dist_max;
         self.config.pace_min = page.pace_min;
@@ -744,6 +811,7 @@ impl App {
         } else {
             "legacy".into()
         };
+        self.config.track_spec = track_spec;
         let _ = crate::api::model::save_config(&self.config);
 
         let identity = self.identity.clone();
@@ -770,6 +838,7 @@ impl App {
                 seed,
                 route_mode,
                 ordinary_pick,
+                track_spec,
             };
             let payload = match crate::api::flow::run_full_flow(&mut client, &params, &mut log) {
                 Ok(out) => {

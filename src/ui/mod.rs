@@ -363,6 +363,11 @@ impl App {
                 plan: None,
                 route_mode: crate::track::generate_road::RouteMode::from_str(&config.route_mode),
                 ordinary_pick: config.ordinary_pick as i64,
+                track_spec: config.track_spec,
+                custom_track_length: match config.track_spec {
+                    crate::track::stadium::TrackSpec::Custom { total_m } => total_m.to_string(),
+                    _ => "400".into(),
+                },
                 map: map::MapState::default(),
                 preview: None,
                 preview_stale: true,

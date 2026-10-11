@@ -33,6 +33,8 @@ pub struct RunParams {
     pub route_mode: RouteMode,
     /// 真实道路模式随机选中的普通打卡点数量（运行时可变）。
     pub ordinary_pick: usize,
+    /// Optional standard athletics-track preset; Auto preserves route_mode behavior.
+    pub track_spec: crate::track::stadium::TrackSpec,
 }
 
 pub struct RunOutcome {
@@ -328,7 +330,19 @@ pub fn run_full_flow(
     ));
     // 随机 0-4 秒偏移（终端上报的 flag 与首点差 <5s），轨迹/提交/OBS/五点统一使用
     let start_ms = params.start_ms + (rand::random::<i64>() % 5) * 1000;
-    let mut track = match params.route_mode {
+    let mut track = if params.track_spec != crate::track::stadium::TrackSpec::Auto {
+        log(&format!("[track] 使用{}操场模式", params.track_spec.label()));
+        crate::track::generator::build_stadium(
+            params.dist,
+            params.dur,
+            params.seed,
+            (anchor.latitude, anchor.longitude),
+            start_ms,
+            &pts_bd,
+            params.track_spec,
+        )?
+    } else {
+        match params.route_mode {
         RouteMode::Road => {
             let cfg = crate::api::model::load_config();
             if cfg.osm_path.is_empty() {
@@ -414,6 +428,7 @@ pub fn run_full_flow(
             start_ms,
             &pts_bd,
         ),
+        }
     };
     if let Some(range) = params.manual_altitude_range {
         crate::track::altitude::override_bd_a_range(&mut track, range)?;
@@ -539,6 +554,8 @@ mod tests {
             manual_altitude_range: None,
             seed: 7,
             route_mode: RouteMode::Legacy,
+            ordinary_pick: 0,
+            track_spec: crate::track::stadium::TrackSpec::Auto,
         }
     }
 
