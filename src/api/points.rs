@@ -146,12 +146,7 @@ fn find_checkpoint_fallback(root: &Value, depth: usize, inside_fence: bool) -> O
     }
     match root {
         Value::Object(map) => {
-            let object_is_fence = inside_fence
-                || map.keys().any(|key| {
-                    let key = key.to_ascii_lowercase();
-                    key.contains("geofence") || key == "fences" || key == "fence"
-                });
-            if !object_is_fence {
+            if !inside_fence {
                 for name in ["pointList", "points"] {
                     if let Some(value) = map.get(name).filter(|v| !v.is_null()) {
                         return Some(value.clone());
@@ -160,7 +155,7 @@ fn find_checkpoint_fallback(root: &Value, depth: usize, inside_fence: bool) -> O
             }
             for (key, value) in map {
                 if let Some(found) =
-                    find_checkpoint_fallback(value, depth - 1, object_is_fence || key.to_ascii_lowercase().contains("fence"))
+                    find_checkpoint_fallback(value, depth - 1, inside_fence || key.to_ascii_lowercase().contains("fence"))
                 {
                     return Some(found);
                 }
@@ -441,5 +436,15 @@ mod tests {
         let points = extract_points(&payload);
         assert_eq!(points.len(), 1);
         assert_eq!(points[0]["lat"], 39.2);
+    }
+
+    #[test]
+    fn generic_checkpoint_list_survives_sibling_fences() {
+        let payload = json!({"data": {
+            "geoFences": [{"points": [{"lat": 1.0, "lon": 2.0}]}],
+            "result": {"points": [{"lat": 39.2, "lon": 116.2}]}
+        }});
+        assert_eq!(extract_points(&payload), vec![json!({"lat": 39.2, "lon": 116.2})]);
+        assert!(extract_points(&json!({"geoFences": [{"points": [{"lat": 1.0, "lon": 2.0}]}]})).is_empty());
     }
 }
