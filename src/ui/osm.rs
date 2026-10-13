@@ -8,24 +8,13 @@ use route_planner::{Coord, RoadGraph};
 use super::map::{collect_bounds, MapState};
 use super::{theme, App};
 
+#[derive(Default)]
 pub struct OsmPage {
     pub path: String,
     pub busy: bool,
     pub status: String,
     pub map: MapState,
     pub fitted: bool,
-}
-
-impl Default for OsmPage {
-    fn default() -> Self {
-        OsmPage {
-            path: String::new(),
-            busy: false,
-            status: String::new(),
-            map: MapState::default(),
-            fitted: false,
-        }
-    }
 }
 
 fn ring_to_pts(ring: &[Coord]) -> Vec<(f64, f64)> {

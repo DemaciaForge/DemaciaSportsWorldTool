@@ -4,9 +4,7 @@
 use super::client::{check_business, ureq_err, ApiClient};
 use super::model::HOST;
 use crate::crypto::decrypt::{decrypt_response, derive_paes_key};
-use crate::crypto::envelope::{
-    build_envelope, build_envelope_ts, rsa_public_key, OuterOrder,
-};
+use crate::crypto::envelope::{build_envelope, build_envelope_ts, rsa_public_key, OuterOrder};
 use crate::crypto::header::{build_android_header, HeaderIdentity, UA_ANDROID};
 use crate::crypto::sign::{original_sign, signature};
 use crate::track::calorie::{avg_power, official_kcal};
@@ -105,10 +103,16 @@ pub struct SubmitResult {
 }
 
 /// 提交跑步记录（sportType=1 自由跑 + 实时五点）。
-pub fn submit_record(client: &mut ApiClient, p: &SubmitParams, log: &mut dyn FnMut(&str)) -> Result<SubmitResult, String> {
+pub fn submit_record(
+    client: &mut ApiClient,
+    p: &SubmitParams,
+    log: &mut dyn FnMut(&str),
+) -> Result<SubmitResult, String> {
     let track = &p.track;
     let start_coordinate = track.validate_consistency()?;
-    if p.five_point_json.is_empty() { return Err("五点轨迹不能为空".into()); }
+    if p.five_point_json.is_empty() {
+        return Err("五点轨迹不能为空".into());
+    }
     validate_five_point_wrapper(&p.five_point_json)?;
     let total_time = track.totalTime;
     let total_dis = track.totalDistance;
@@ -140,9 +144,15 @@ pub fn submit_record(client: &mut ApiClient, p: &SubmitParams, log: &mut dyn FnM
     body.insert("selectedUnid".into(), Value::from(unid));
     body.insert("selRunTime".into(), Value::from(total_time));
     body.insert("selDistance".into(), Value::from(p.min_distance));
-    body.insert("totalDis".into(), Value::from(round_to(total_dis, 0) as i64));
+    body.insert(
+        "totalDis".into(),
+        Value::from(round_to(total_dis, 0) as i64),
+    );
     body.insert("speed".into(), Value::from(speed));
-    body.insert("validDis".into(), Value::from(round_to(total_dis, 0) as i64));
+    body.insert(
+        "validDis".into(),
+        Value::from(round_to(total_dis, 0) as i64),
+    );
     body.insert("validTime".into(), Value::from(total_time));
     body.insert("complete".into(), Value::Bool(true));
     body.insert("unCompleteReason".into(), Value::from(0));
@@ -151,10 +161,19 @@ pub fn submit_record(client: &mut ApiClient, p: &SubmitParams, log: &mut dyn FnM
     body.insert("avgStepFreq".into(), Value::from(avg_step_freq));
     body.insert("useMobilityTools".into(), Value::from(0));
     body.insert("faceCheck".into(), Value::from(p.face_check));
-    body.insert("totalAscent".into(), Value::from(round_to(ascent, 0) as i64));
+    body.insert(
+        "totalAscent".into(),
+        Value::from(round_to(ascent, 0) as i64),
+    );
     body.insert("avgPower".into(), Value::from(power));
-    body.insert("speedPerTenSec".into(), Value::Array(android_tensec(track, start_ms, "speed")));
-    body.insert("stepsPerTenSec".into(), Value::Array(android_tensec(track, start_ms, "steps")));
+    body.insert(
+        "speedPerTenSec".into(),
+        Value::Array(android_tensec(track, start_ms, "speed")),
+    );
+    body.insert(
+        "stepsPerTenSec".into(),
+        Value::Array(android_tensec(track, start_ms, "steps")),
+    );
     body.insert("isUpload".into(), Value::Bool(false));
     body.insert("more".into(), Value::Bool(false));
     body.insert("latitude".into(), Value::from(start_coordinate.latitude));
@@ -162,7 +181,10 @@ pub fn submit_record(client: &mut ApiClient, p: &SubmitParams, log: &mut dyn FnM
     body.insert("maxRunTime".into(), Value::from(0));
     body.insert("minSteps".into(), Value::from(0));
     if !p.five_point_json.is_empty() {
-        body.insert("fivePointJson".into(), Value::String(p.five_point_json.clone()));
+        body.insert(
+            "fivePointJson".into(),
+            Value::String(p.five_point_json.clone()),
+        );
     }
     // Android 必现扩展字段
     body.insert("errorCode".into(), Value::from(0));
@@ -170,7 +192,10 @@ pub fn submit_record(client: &mut ApiClient, p: &SubmitParams, log: &mut dyn FnM
     body.insert("unauthorized".into(), Value::from(0));
     body.insert("themeId".into(), Value::from(0));
     body.insert("goalId".into(), Value::Null);
-    body.insert("address".into(), Value::String(p.address.trim().to_string()));
+    body.insert(
+        "address".into(),
+        Value::String(p.address.trim().to_string()),
+    );
 
     let body_val = Value::Object(body.clone());
     let sig = signature(&body_val, false);
@@ -191,10 +216,16 @@ pub fn submit_record(client: &mut ApiClient, p: &SubmitParams, log: &mut dyn FnM
         device_name: "22081212C".into(),
         ..client.identity.clone()
     };
-    let (hp, hp_extra) = build_android_header(&android_identity, p.uid, &client_token(client), None);
+    let (hp, hp_extra) =
+        build_android_header(&android_identity, p.uid, &client_token(client), None);
     let header_env = build_envelope(&mut client.session, &hp, OuterOrder::Observed);
     let now = crate::crypto::envelope::now_ms();
-    let body_env = build_envelope_ts(&mut client.session, &body_plain, OuterOrder::Insert, now + 1);
+    let body_env = build_envelope_ts(
+        &mut client.session,
+        &body_plain,
+        OuterOrder::Insert,
+        now + 1,
+    );
 
     let runes = format!("{}{}", p.policy_ts, p.uid);
     let runef = format!("{}{}", run_uuid, start_ms);
@@ -212,15 +243,23 @@ pub fn submit_record(client: &mut ApiClient, p: &SubmitParams, log: &mut dyn FnM
     let resp = req.send_string(&body_env.json).map_err(ureq_err)?;
     let status = resp.status();
     let raw = resp.into_string().unwrap_or_default();
-    log(&format!("[record] sportType=1 HTTP {status} len={}", raw.len()));
+    log(&format!(
+        "[record] sportType=1 HTTP {status} len={}",
+        raw.len()
+    ));
 
     let key = derive_paes_key(
-        &body_env.key_data[0], &body_env.key_data[1], &body_env.key_data[2], &body_env.key_data[3],
+        &body_env.key_data[0],
+        &body_env.key_data[1],
+        &body_env.key_data[2],
+        &body_env.key_data[3],
     );
     let dec = decrypt_response(raw.as_bytes(), &key, &rsa_public_key())
         .map_err(|e| format!("提交响应解密失败: {e}"))?;
     let biz = check_business(&dec.business)?;
-    let rrid = super::client::get_field(&biz, "rrid").and_then(|v| v.as_i64()).unwrap_or(0);
+    let rrid = super::client::get_field(&biz, "rrid")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     if rrid <= 0 {
         return Err(format!("提交未返回 rrid: {}", truncate_json(&biz)));
     }
@@ -241,7 +280,11 @@ pub fn submit_record(client: &mut ApiClient, p: &SubmitParams, log: &mut dyn FnM
 }
 
 fn client_token(client: &ApiClient) -> String {
-    client.login.as_ref().map(|s| s.token.clone()).unwrap_or_default()
+    client
+        .login
+        .as_ref()
+        .map(|s| s.token.clone())
+        .unwrap_or_default()
 }
 
 fn truncate_json(v: &Value) -> String {

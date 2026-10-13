@@ -27,11 +27,19 @@ pub fn parse_spec(text: &str) -> Result<Option<AltitudeSpec>, String> {
         return Ok(None);
     }
     if let Some((left, right)) = text.split_once('-') {
-        let min_m = left.trim().parse::<f64>().map_err(|_| "手动海拔区间格式应为 min-max，例如 11.6-22.8".to_string())?;
-        let max_m = right.trim().parse::<f64>().map_err(|_| "手动海拔区间格式应为 min-max，例如 11.6-22.8".to_string())?;
+        let min_m = left
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| "手动海拔区间格式应为 min-max，例如 11.6-22.8".to_string())?;
+        let max_m = right
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| "手动海拔区间格式应为 min-max，例如 11.6-22.8".to_string())?;
         return Ok(Some(AltitudeSpec::Range(validate_range(min_m, max_m)?)));
     }
-    let altitude_m = text.parse::<f64>().map_err(|_| "手动海拔应为数字或 min-max 区间，例如 17.2 或 11.6-22.8".to_string())?;
+    let altitude_m = text
+        .parse::<f64>()
+        .map_err(|_| "手动海拔应为数字或 min-max 区间，例如 17.2 或 11.6-22.8".to_string())?;
     validate_altitude(altitude_m)?;
     Ok(Some(AltitudeSpec::Single(altitude_m)))
 }
@@ -114,15 +122,34 @@ mod tests {
 
     #[test]
     fn parses_single_value_and_range() {
-        assert_eq!(parse_spec("17.2").unwrap(), Some(AltitudeSpec::Single(17.2)));
-        assert_eq!(parse_spec("11.6-22.8").unwrap(), Some(AltitudeSpec::Range(AltitudeRange { min_m: 11.6, max_m: 22.8 })));
+        assert_eq!(
+            parse_spec("17.2").unwrap(),
+            Some(AltitudeSpec::Single(17.2))
+        );
+        assert_eq!(
+            parse_spec("11.6-22.8").unwrap(),
+            Some(AltitudeSpec::Range(AltitudeRange {
+                min_m: 11.6,
+                max_m: 22.8
+            }))
+        );
         assert!(parse_spec("22.8-11.6").is_err());
     }
 
     #[test]
     fn range_mapping_stays_inside_requested_bounds() {
         let mut track = build(1200.0, 600, 7, (38.9, 121.54), 1_700_000_000_000, &points());
-        override_bd_a_range(&mut track, AltitudeRange { min_m: 11.6, max_m: 22.8 }).unwrap();
-        assert!(track.locations.iter().all(|p| (11.6..=22.8).contains(&p.bdA)));
+        override_bd_a_range(
+            &mut track,
+            AltitudeRange {
+                min_m: 11.6,
+                max_m: 22.8,
+            },
+        )
+        .unwrap();
+        assert!(track
+            .locations
+            .iter()
+            .all(|p| (11.6..=22.8).contains(&p.bdA)));
     }
 }

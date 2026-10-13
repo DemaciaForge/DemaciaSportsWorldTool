@@ -60,8 +60,10 @@ pub fn apply_post_fixes(locs: &mut [GenPoint], rng: &mut Rng, start_ms: i64) {
     // 边界修正①：索引2 首个真实点 avgSpeed 不跨哨兵计算，并保持在有效窗口内
     if locs.len() > 3 {
         let p2 = &mut locs[2];
-        p2.avgSpeed = round_to(p2.totalDis / 1.0f64.max(p2.totalTime as f64), 4)
-            .clamp(crate::track::generator::SPEED_FLOOR, crate::track::generator::SPEED_CEIL);
+        p2.avgSpeed = round_to(p2.totalDis / 1.0f64.max(p2.totalTime as f64), 4).clamp(
+            crate::track::generator::SPEED_FLOOR,
+            crate::track::generator::SPEED_CEIL,
+        );
         p2.speed = round_to(p2.avgSpeed * 3.6, 4);
     }
     // 首点 = 起点：totalTime=0、type∈{0,7}、速度取首个非零值

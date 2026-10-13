@@ -25,6 +25,7 @@ impl Default for OuParams {
 }
 
 /// 生成 n 步 OU 速度序列（m/s），首值为 v0，并钳制到 [floor, ceil]。
+#[allow(clippy::too_many_arguments)]
 pub fn ou_series(
     mu: f64,
     v0: f64,

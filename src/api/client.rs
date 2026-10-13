@@ -46,7 +46,10 @@ impl ApiClient {
     }
 
     fn token(&self) -> String {
-        self.login.as_ref().map(|s| s.token.clone()).unwrap_or_default()
+        self.login
+            .as_ref()
+            .map(|s| s.token.clone())
+            .unwrap_or_default()
     }
 
     /// 发送信封请求（header/headerSign 用 observed 序，body 用 insert 序）。
@@ -64,8 +67,12 @@ impl ApiClient {
         let (header_plain, _) = build_header_for(&self.identity, uid, &token, None);
         let header_env = build_envelope(&mut self.session, &header_plain, OuterOrder::Observed);
         // body 时间戳 = header ts + 1（原生两次独立读取毫秒）
-        let body_env =
-            build_envelope_ts(&mut self.session, body_plain, OuterOrder::Insert, header_env.ts_ms + 1);
+        let body_env = build_envelope_ts(
+            &mut self.session,
+            body_plain,
+            OuterOrder::Insert,
+            header_env.ts_ms + 1,
+        );
 
         let mut req = self.agent.request(method, url);
         req = req.set("Content-Type", "application/json; charset=utf-8");
@@ -85,11 +92,20 @@ impl ApiClient {
             &body_env.key_data[2],
             &body_env.key_data[3],
         );
-        let (decrypted, raw_head) = match decrypt_response(raw.as_bytes(), &key, &rsa_public_key()) {
+        let (decrypted, raw_head) = match decrypt_response(raw.as_bytes(), &key, &rsa_public_key())
+        {
             Ok(d) => (Some(d), String::new()),
-            Err(e) => (None, format!("{e} | 原文: {}", crate::textlog::truncate(&raw, 160))),
+            Err(e) => (
+                None,
+                format!("{e} | 原文: {}", crate::textlog::truncate(&raw, 160)),
+            ),
         };
-        Ok(RequestOutcome { http_status: status, decrypted, raw_len, raw_head })
+        Ok(RequestOutcome {
+            http_status: status,
+            decrypted,
+            raw_len,
+            raw_head,
+        })
     }
 
     /// 标准业务请求（RUN 域名）：返回业务 JSON；error != 10000 时 Err。
@@ -100,7 +116,13 @@ impl ApiClient {
         body_plain: &str,
         extra_headers: &[(String, String)],
     ) -> Result<serde_json::Value, String> {
-        self.call_host(crate::api::model::HOST, method, path, body_plain, extra_headers)
+        self.call_host(
+            crate::api::model::HOST,
+            method,
+            path,
+            body_plain,
+            extra_headers,
+        )
     }
 
     /// 指定域名业务请求（排行榜/违规名单走 DISCOVERY，信封链相同）。
@@ -129,7 +151,10 @@ impl ApiClient {
             }
         };
         let biz_str = serde_json::to_string(&business).unwrap_or_default();
-        eprintln!("[resp] {} -> {} ({}B) {}", path, out.http_status, out.raw_len, biz_str);
+        eprintln!(
+            "[resp] {} -> {} ({}B) {}",
+            path, out.http_status, out.raw_len, biz_str
+        );
         Ok(business)
     }
 }
@@ -162,7 +187,9 @@ pub fn get_field<'a>(biz: &'a serde_json::Value, name: &str) -> Option<&'a serde
 /// data 字段如果是 JSON 字符串则解析（Obs 一层包裹语义）。
 pub fn parse_data_field(biz: &serde_json::Value) -> serde_json::Value {
     match biz.get("data") {
-        Some(serde_json::Value::String(s)) => serde_json::from_str(s).unwrap_or(serde_json::Value::Null),
+        Some(serde_json::Value::String(s)) => {
+            serde_json::from_str(s).unwrap_or(serde_json::Value::Null)
+        }
         Some(v) => v.clone(),
         None => serde_json::Value::Null,
     }

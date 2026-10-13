@@ -48,7 +48,13 @@ fn android_value(v: &serde_json::Value) -> String {
     match v {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Null => "null".into(),
-        serde_json::Value::Bool(b) => if *b { "true".into() } else { "false".into() },
+        serde_json::Value::Bool(b) => {
+            if *b {
+                "true".into()
+            } else {
+                "false".into()
+            }
+        }
         serde_json::Value::Number(n) => n.to_string(),
         other => other.to_string(),
     }
@@ -81,7 +87,7 @@ fn filter_signature(m: Vec<(String, String)>) -> Vec<(String, String)> {
 fn join_query(m: &[(String, String)], ignore_case: bool) -> String {
     let mut items: Vec<&(String, String)> = m.iter().collect();
     if ignore_case {
-        items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        items.sort_by_key(|a| a.0.to_lowercase());
     } else {
         items.sort_by(|a, b| a.0.cmp(&b.0));
     }
@@ -132,9 +138,14 @@ mod tests {
             "roomId": 1001
         });
         assert_eq!(signature(&sample, true), "f2b958b2b9c8e99c4156076fbc72aabe");
-        assert_eq!(signature(&sample, false), "6187185669bbd60d0c9ff4148f33e16d");
+        assert_eq!(
+            signature(&sample, false),
+            "6187185669bbd60d0c9ff4148f33e16d"
+        );
         let orig = original_sign(&sample, true);
-        assert!(orig.starts_with("address=&avgPower=0&avgStepFreq=134&calorie=0&complete=true&errorCode=0&faceChec"));
+        assert!(orig.starts_with(
+            "address=&avgPower=0&avgStepFreq=134&calorie=0&complete=true&errorCode=0&faceChec"
+        ));
         // goalId=null → "null"
         assert!(orig.contains("goalId=null"));
     }
@@ -144,7 +155,11 @@ mod tests {
     fn test_url_sign() {
         let url = "https://run.gxapp.iydsj.com/api/v560/get/1/distance/1";
         let expect = md5_hex(
-            format!("http://run.gxapp.iydsj.com/api/v560/get/1/distance/1{}", SALT).as_bytes(),
+            format!(
+                "http://run.gxapp.iydsj.com/api/v560/get/1/distance/1{}",
+                SALT
+            )
+            .as_bytes(),
         );
         assert_eq!(md5_url_sign(url), expect);
     }

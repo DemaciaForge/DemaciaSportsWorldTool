@@ -42,28 +42,28 @@ pub fn install(ctx: &egui::Context) -> Option<String> {
 
     #[cfg(not(target_os = "android"))]
     {
-    let dir = fonts_dir();
-    for name in CANDIDATES {
-        let path = dir.join(name);
-        let Ok(data) = std::fs::read(&path) else {
-            continue;
-        };
-        let mut fonts = egui::FontDefinitions::default();
-        // ttc 集合取 index 0（msyh.ttc[0] = Microsoft YaHei）
-        fonts
-            .font_data
-            .insert(name.to_string(), egui::FontData::from_owned(data));
-        // proportional：插到最前（中文优先由雅黑渲染）
-        if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            list.insert(0, name.to_string());
+        let dir = fonts_dir();
+        for name in CANDIDATES {
+            let path = dir.join(name);
+            let Ok(data) = std::fs::read(&path) else {
+                continue;
+            };
+            let mut fonts = egui::FontDefinitions::default();
+            // ttc 集合取 index 0（msyh.ttc[0] = Microsoft YaHei）
+            fonts
+                .font_data
+                .insert(name.to_string(), egui::FontData::from_owned(data));
+            // proportional：插到最前（中文优先由雅黑渲染）
+            if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                list.insert(0, name.to_string());
+            }
+            // monospace：追加（数字/ASCII 仍用默认等宽，中文回落雅黑）
+            if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                list.push(name.to_string());
+            }
+            ctx.set_fonts(fonts);
+            return Some(name.to_string());
         }
-        // monospace：追加（数字/ASCII 仍用默认等宽，中文回落雅黑）
-        if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-            list.push(name.to_string());
-        }
-        ctx.set_fonts(fonts);
-        return Some(name.to_string());
-    }
-    None
+        None
     }
 }

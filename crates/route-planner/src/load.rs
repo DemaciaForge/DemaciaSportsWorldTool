@@ -99,6 +99,7 @@ pub fn parse_osm(bytes: &[u8]) -> Result<ParsedOsm, String> {
     // relation 建筑：收集 outer way id。
     let mut rel_buildings: Vec<Vec<u64>> = Vec::new();
 
+    #[allow(clippy::type_complexity)]
     let mut cur_way: Option<(u64, Vec<u64>, Vec<(String, String)>)> = None;
     let mut cur_rel: Option<Vec<(String, String, String)>> = None;
     let mut cur_rel_tags: Vec<(String, String)> = Vec::new();

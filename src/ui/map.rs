@@ -94,7 +94,7 @@ impl MapState {
             self.dragged = true;
         }
         if scroll != 0.0 {
-            let factor = (scroll * 0.0015).exp() as f32;
+            let factor = (scroll * 0.0015).exp();
             self.scale = (self.scale * factor).clamp(0.002, 200.0);
         }
     }

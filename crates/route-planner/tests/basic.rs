@@ -109,11 +109,7 @@ fn test_virtual_nodes_two_mid_edge_splits() {
     assert_eq!(v.len(), 2);
     let c1 = g.node_coord(v[0]);
     let c2 = g.node_coord(v[1]);
-    assert!(
-        (c1.lat - 0.0003).abs() < 1e-4,
-        "第一个投影点偏移: {:?}",
-        c1
-    );
+    assert!((c1.lat - 0.0003).abs() < 1e-4, "第一个投影点偏移: {:?}", c1);
     assert!(
         (c2.lat - 0.0007).abs() < 1e-4,
         "第二个投影点被锚到错误边: {:?}",

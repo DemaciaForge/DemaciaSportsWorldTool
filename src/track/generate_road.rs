@@ -460,11 +460,7 @@ pub fn build_road(
         // 生物力学联动：v=(cad/60)·stride
         let v_now = speeds[i];
         let mut stride = v_now * 60.0 / cadences[i];
-        if stride > 1.7 {
-            stride = 1.7;
-        } else if stride < 0.5 {
-            stride = 0.5;
-        }
+        stride = stride.clamp(0.5, 1.7);
         let cad = v_now * 60.0 / stride;
         steps_acc += cad / 60.0 * dt;
         let nxt = pos(s + 2.0);

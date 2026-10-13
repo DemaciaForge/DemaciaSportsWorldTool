@@ -66,29 +66,67 @@ impl App {
             ui.radio_value(&mut self.ai_page.mode, 1, "按次");
         });
 
-        egui::Grid::new("ai_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-            if self.ai_page.mode == 0 {
-                ui.label("时长（分钟）：");
-                mobile::drag_i64(ui, "ai_minutes", &mut self.config.ai_minutes, 1..=30, 1.0, "", " 分钟");
+        egui::Grid::new("ai_grid")
+            .num_columns(2)
+            .spacing([10.0, 6.0])
+            .show(ui, |ui| {
+                if self.ai_page.mode == 0 {
+                    ui.label("时长（分钟）：");
+                    mobile::drag_i64(
+                        ui,
+                        "ai_minutes",
+                        &mut self.config.ai_minutes,
+                        1..=30,
+                        1.0,
+                        "",
+                        " 分钟",
+                    );
+                    ui.end_row();
+                } else {
+                    ui.label("个数：");
+                    mobile::drag_i64(
+                        ui,
+                        "ai_reps",
+                        &mut self.config.ai_reps,
+                        5..=1000,
+                        5.0,
+                        "",
+                        " 个",
+                    );
+                    ui.end_row();
+                }
+                ui.label("补签天数（含今天）：");
+                mobile::drag_i64(
+                    ui,
+                    "ai_days",
+                    &mut self.ai_page.days,
+                    1..=60,
+                    1.0,
+                    "",
+                    " 天",
+                );
                 ui.end_row();
-            } else {
-                ui.label("个数：");
-                mobile::drag_i64(ui, "ai_reps", &mut self.config.ai_reps, 5..=1000, 5.0, "", " 个");
+                ui.label("每天次数：");
+                mobile::drag_i64(
+                    ui,
+                    "ai_per_day",
+                    &mut self.ai_page.per_day,
+                    1..=10,
+                    1.0,
+                    "",
+                    "",
+                );
                 ui.end_row();
-            }
-            ui.label("补签天数（含今天）：");
-            mobile::drag_i64(ui, "ai_days", &mut self.ai_page.days, 1..=60, 1.0, "", " 天");
-            ui.end_row();
-            ui.label("每天次数：");
-            mobile::drag_i64(ui, "ai_per_day", &mut self.ai_page.per_day, 1..=10, 1.0, "", "");
-            ui.end_row();
-        });
+            });
 
         ui.add_space(8.0);
         let logged = self.session.is_some();
         let one_enabled = !self.ai_busy && logged && !self.ai_page.list.is_empty();
         mobile::row(ui, |ui| {
-            if ui.add_enabled(one_enabled, theme::primary_btn("提交成绩")).clicked() {
+            if ui
+                .add_enabled(one_enabled, theme::primary_btn("提交成绩"))
+                .clicked()
+            {
                 let sport_id = self
                     .ai_page
                     .list
@@ -124,7 +162,8 @@ impl App {
             let response = if mobile::compact_ui(ui) {
                 ui.add_enabled_ui(!self.ai_busy && logged && !picked.is_empty(), |ui| {
                     ui.add_sized([ui.available_width(), mobile::TOUCH_HEIGHT], btn)
-                }).inner
+                })
+                .inner
             } else {
                 ui.add_enabled(!self.ai_busy && logged && !picked.is_empty(), btn)
             };
@@ -143,30 +182,35 @@ impl App {
             let mut confirmed = false;
             let mut cancelled = false;
             egui::Window::new(
-                egui::RichText::new("确认批量提交").strong().color(theme::text()),
+                egui::RichText::new("确认批量提交")
+                    .strong()
+                    .color(theme::text()),
             )
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .order(egui::Order::Foreground)
-                .show(ui.ctx(), |ui| {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "将顺序提交 {} 条：{} 天 × 每天 {} 次 × {} 个项目",
-                            total, plan.days, plan.per_day, plan.sport_ids.len()
-                        ))
-                        .color(theme::text()),
-                    );
-                    ui.add_space(6.0);
-                    mobile::row(ui, |ui| {
-                        if ui.button("取消").clicked() {
-                            cancelled = true;
-                        }
-                        if ui.add(theme::primary_btn("确认提交")).clicked() {
-                            confirmed = true;
-                        }
-                    });
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .order(egui::Order::Foreground)
+            .show(ui.ctx(), |ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "将顺序提交 {} 条：{} 天 × 每天 {} 次 × {} 个项目",
+                        total,
+                        plan.days,
+                        plan.per_day,
+                        plan.sport_ids.len()
+                    ))
+                    .color(theme::text()),
+                );
+                ui.add_space(6.0);
+                mobile::row(ui, |ui| {
+                    if ui.button("取消").clicked() {
+                        cancelled = true;
+                    }
+                    if ui.add(theme::primary_btn("确认提交")).clicked() {
+                        confirmed = true;
+                    }
                 });
+            });
             if confirmed {
                 self.run_ai_batch(plan);
             } else if cancelled {
@@ -198,25 +242,29 @@ impl App {
         self.spawn_job(move |tx| {
             let mut log = App::logger(tx.clone());
             let mut client = crate::api::client::ApiClient::new(identity, Some(session));
-            let payload =
-                match crate::api::flow::run_ai_submit(&mut client, sport_id, mode, &mut log) {
-                    Ok(biz) => {
-                        log(&format!("[ai] 响应：{}", truncate_json(&biz)));
-                        serde_json::json!({
-                            "ok": true,
-                            "sport_id": sport_id,
-                            "mode": mode_label,
-                            "score": score_label,
-                            "secs": secs, "per_min": per_min, "consume": consume,
-                            "resp_error": biz.get("error").cloned().unwrap_or(serde_json::Value::Null),
-                            "resp_msg": biz.get("message").and_then(|m| m.as_str()).unwrap_or(""),
-                        })
-                    }
-                    Err(e) => {
-                        log(&format!("× AI 提交失败: {e}"));
-                        serde_json::json!({ "ok": false, "message": e })
-                    }
-                };
+            let payload = match crate::api::flow::run_ai_submit(
+                &mut client,
+                sport_id,
+                mode,
+                &mut log,
+            ) {
+                Ok(biz) => {
+                    log(&format!("[ai] 响应：{}", truncate_json(&biz)));
+                    serde_json::json!({
+                        "ok": true,
+                        "sport_id": sport_id,
+                        "mode": mode_label,
+                        "score": score_label,
+                        "secs": secs, "per_min": per_min, "consume": consume,
+                        "resp_error": biz.get("error").cloned().unwrap_or(serde_json::Value::Null),
+                        "resp_msg": biz.get("message").and_then(|m| m.as_str()).unwrap_or(""),
+                    })
+                }
+                Err(e) => {
+                    log(&format!("× AI 提交失败: {e}"));
+                    serde_json::json!({ "ok": false, "message": e })
+                }
+            };
             tx.send(format!("__AI_DONE__{payload}")).ok();
         });
     }
@@ -242,18 +290,28 @@ impl App {
                             Some(random_time_days_ago(day))
                         };
                         done += 1;
-                        let tag = if day == 0 { "今天".to_string() } else { format!("{day} 天前") };
+                        let tag = if day == 0 {
+                            "今天".to_string()
+                        } else {
+                            format!("{day} 天前")
+                        };
                         match crate::api::ai::upload(&mut client, sport, plan.mode, at) {
                             Ok(biz) if biz.get("error").and_then(|e| e.as_i64()) == Some(10000) => {
                                 ok += 1;
-                                log(&format!("√ [ai] {tag} sport={sport} 成功（{done}/{total}）"));
+                                log(&format!(
+                                    "√ [ai] {tag} sport={sport} 成功（{done}/{total}）"
+                                ));
                             }
                             Ok(biz) => {
                                 let msg = biz.get("message").and_then(|m| m.as_str()).unwrap_or("");
-                                log(&format!("× [ai] {tag} sport={sport} 失败: {msg}（{done}/{total}）"));
+                                log(&format!(
+                                    "× [ai] {tag} sport={sport} 失败: {msg}（{done}/{total}）"
+                                ));
                             }
                             Err(e) => {
-                                log(&format!("× [ai] {tag} sport={sport} 失败: {e}（{done}/{total}）"));
+                                log(&format!(
+                                    "× [ai] {tag} sport={sport} 失败: {e}（{done}/{total}）"
+                                ));
                             }
                         }
                         std::thread::sleep(std::time::Duration::from_millis(1200));
@@ -323,7 +381,14 @@ fn random_time_days_ago(days_ago: i64) -> i64 {
     let base = Local::now() - Duration::days(days_ago);
     let h = 7 + rand::random::<u32>() % 15;
     Local
-        .with_ymd_and_hms(base.year(), base.month(), base.day(), h, rand::random::<u32>() % 60, rand::random::<u32>() % 60)
+        .with_ymd_and_hms(
+            base.year(),
+            base.month(),
+            base.day(),
+            h,
+            rand::random::<u32>() % 60,
+            rand::random::<u32>() % 60,
+        )
         .single()
         .map(|t| t.timestamp_millis())
         .unwrap_or_else(crate::crypto::envelope::now_ms)

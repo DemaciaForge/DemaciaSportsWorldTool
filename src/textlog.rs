@@ -48,7 +48,7 @@ mod tests {
         let s = "中文字符串测试";
         for n in 0..=s.len() + 4 {
             let out = truncate(s, n);
-            assert!(out.chars().count() <= n.max(0));
+            assert!(out.chars().count() <= n);
         }
         assert_eq!(truncate("中文abc", 4), "中文ab");
     }

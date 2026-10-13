@@ -145,7 +145,7 @@ pub fn to_bd(x: f64, y: f64, c_lat: f64, c_lng: f64) -> (f64, f64) {
 
 const X_PI: f64 = std::f64::consts::PI * 3000.0 / 180.0;
 const WGS_A: f64 = 6378245.0;
-const WGS_EE: f64 = 0.00669342162296594323;
+const WGS_EE: f64 = 0.006_693_421_622_965_943;
 
 fn out_of_china(lat: f64, lng: f64) -> bool {
     lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271
