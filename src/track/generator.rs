@@ -41,6 +41,79 @@ fn fit_speeds(w: &mut [f64], dts: &[f64], target: f64) {
     }
 }
 
+/// 经典速度剖面：5s 主采样时间网格 + ramp×疲劳×三正弦×余弦凹陷×微噪速度曲线，
+/// 逐点速度约束在有效配速窗口内并精确命中目标距离。返回 (times, dts, speeds)。
+/// 自定义路线（track::custom）复用同一剖面，保证协议字段与经典模式一致。
+pub(crate) fn speed_profile(
+    dist: f64,
+    dur: i64,
+    rng: &mut Rng,
+) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+    let dur_f = dur as f64;
+    let phase_v = rng.uniform(0.0, std::f64::consts::TAU);
+    let mut times = Vec::new();
+    let mut t = 0.0;
+    while t < dur_f {
+        times.push(t);
+        t += if rng.random() < 0.80 {
+            5.0
+        } else {
+            rng.choice(&[1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0])
+        };
+    }
+    let n = times.len();
+
+    let n_dips = rng.choice(&[1, 1, 2]);
+    let mut dips = Vec::new();
+    for _ in 0..n_dips {
+        dips.push((
+            rng.uniform(0.15, 0.75) * dur_f,
+            rng.uniform(25.0, 55.0),
+            rng.uniform(0.08, 0.16),
+        ));
+    }
+    let dip_factor = |t: f64| -> f64 {
+        let mut f = 1.0;
+        for &(c, hw, d) in &dips {
+            if (t - c).abs() < hw {
+                f *= 1.0 - d * 0.5 * (1.0 + std::f64::consts::PI * (t - c) / hw).cos();
+            }
+        }
+        f
+    };
+    let base = dist / dur_f;
+    let mut w = Vec::with_capacity(n);
+    for &tt in &times {
+        let ramp = if tt < 8.0 {
+            (0.85 + 0.15 * (tt / 1.0f64.max(8.0f64.min(dur_f / 20.0)))).min(1.0)
+        } else {
+            1.0
+        } * if tt > dur_f - 8.0 {
+            1.0 + 0.03 * (tt - (dur_f - 8.0)) / 8.0
+        } else {
+            1.0
+        };
+        let km_done = (tt / dur_f) * dist / 1000.0;
+        let fatigue = if km_done <= 0.5 {
+            1.03
+        } else {
+            (1.03 - 0.06 * (km_done - 0.5)).max(0.80)
+        };
+        let wave = (1.0
+            + 0.010 * (std::f64::consts::TAU * tt / 115.0 + phase_v).sin()
+            + 0.035 * (std::f64::consts::TAU * tt / 47.0 + phase_v * 2.3).sin()
+            + 0.015 * (std::f64::consts::TAU * tt / 19.0 + phase_v * 3.7).sin())
+            * dip_factor(tt);
+        let noise = 1.0 + rng.gauss(0.0, 0.008);
+        w.push(base * ramp * fatigue * wave * noise);
+    }
+    let mut dts: Vec<f64> = (0..n - 1).map(|i| times[i + 1] - times[i]).collect();
+    dts.push(1.0f64.max(dur_f - times[n - 1]));
+    // 逐点速度全部约束在有效配速窗口内，并精确命中目标距离
+    fit_speeds(&mut w, &dts, dist);
+    (times, dts, w)
+}
+
 /// 轨迹生成主入口。points_bd 为 BD 系打卡点。
 pub fn build(
     dist: f64,
@@ -122,71 +195,14 @@ fn build_on_ring(
     let (c_lat, c_lng) = pc;
     let direction: f64 = rng.choice(&[1.0, -1.0]);
     let s0 = rng.uniform(0.0, *arcs.last().unwrap_or(&400.0));
-    let phase_v = rng.uniform(0.0, std::f64::consts::TAU);
     let phase_l = rng.uniform(0.0, std::f64::consts::TAU);
 
-    let mut times = Vec::new();
-    let mut t = 0.0;
-    while t < dur_f {
-        times.push(t);
-        t += if rng.random() < 0.80 {
-            5.0
-        } else {
-            rng.choice(&[1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0])
-        };
-    }
+    let (times, dts, w) = speed_profile(dist, dur, &mut rng);
     let n = times.len();
-
-    let n_dips = rng.choice(&[1, 1, 2]);
-    let mut dips = Vec::new();
-    for _ in 0..n_dips {
-        dips.push((
-            rng.uniform(0.15, 0.75) * dur_f,
-            rng.uniform(25.0, 55.0),
-            rng.uniform(0.08, 0.16),
-        ));
-    }
-    let dip_factor = |t: f64| -> f64 {
-        let mut f = 1.0;
-        for &(c, hw, d) in &dips {
-            if (t - c).abs() < hw {
-                f *= 1.0 - d * 0.5 * (1.0 + std::f64::consts::PI * (t - c) / hw).cos();
-            }
-        }
-        f
-    };
-    let base = dist / dur_f;
-    let mut w = Vec::with_capacity(n);
-    for &tt in &times {
-        let ramp = if tt < 8.0 {
-            (0.85 + 0.15 * (tt / 1.0f64.max(8.0f64.min(dur_f / 20.0)))).min(1.0)
-        } else {
-            1.0
-        } * if tt > dur_f - 8.0 {
-            1.0 + 0.03 * (tt - (dur_f - 8.0)) / 8.0
-        } else {
-            1.0
-        };
-        let km_done = (tt / dur_f) * dist / 1000.0;
-        let fatigue = if km_done <= 0.5 {
-            1.03
-        } else {
-            (1.03 - 0.06 * (km_done - 0.5)).max(0.80)
-        };
-        let wave = (1.0
-            + 0.010 * (std::f64::consts::TAU * tt / 115.0 + phase_v).sin()
-            + 0.035 * (std::f64::consts::TAU * tt / 47.0 + phase_v * 2.3).sin()
-            + 0.015 * (std::f64::consts::TAU * tt / 19.0 + phase_v * 3.7).sin())
-            * dip_factor(tt);
-        let noise = 1.0 + rng.gauss(0.0, 0.008);
-        w.push(base * ramp * fatigue * wave * noise);
-    }
-    let mut dts: Vec<f64> = (0..n - 1).map(|i| times[i + 1] - times[i]).collect();
-    dts.push(1.0f64.max(dur_f - times[n - 1]));
-    // 逐点速度全部约束在有效配速窗口内，并精确命中目标距离
-    fit_speeds(&mut w, &dts, dist);
     let seg_dist: Vec<f64> = (0..n).map(|i| w[i] * dts[i]).collect();
     let speeds: Vec<f64> = w.clone();
+    // 步频波动相位（速度剖面内部相位已由 speed_profile 消费）
+    let phase_v = rng.uniform(0.0, std::f64::consts::TAU);
 
     let kinds: Vec<(i64, i64)> = match color_mode {
         TrackColorMode::FullGreen => vec![(0, 1); n],

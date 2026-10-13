@@ -95,6 +95,20 @@ pub struct RunPage {
     pub preview_stale: bool,
     /// 地图视野是否已适配
     pub map_fitted: bool,
+    /// 自定义路线：起点（地址或坐标）
+    pub custom_origin: String,
+    /// 自定义路线：终点（地址或坐标）
+    pub custom_destination: String,
+    /// 自定义路线：绕圈（A→B→A 闭环）
+    pub custom_loop: bool,
+    /// 自定义路线：圈数（0 = 按目标距离自动）
+    pub custom_laps: i64,
+    /// 高德 Web 服务 Key（留空用 config.amap_key）
+    pub amap_key: String,
+    /// 自定义路线预览（高德解析结果）
+    pub custom_preview: Option<crate::track::custom::CustomRing>,
+    /// 自定义路线预览状态文本
+    pub custom_status: String,
 }
 
 /// 一次提交的确定方案（进入页面/参数变更时抽样生成）。
@@ -276,6 +290,7 @@ impl App {
 
     fn draw_run_content(&mut self, ui: &mut egui::Ui) {
         let prev_route = self.run_page.route_mode;
+        let mut custom_fetch_wanted = false;
         {
             let page = &mut self.run_page;
             let compact = mobile::compact_ui(ui);
@@ -402,6 +417,7 @@ impl App {
                 ui.label("路线算法：");
                 ui.selectable_value(&mut page.route_mode, RouteMode::Legacy, "经典打卡点环");
                 ui.selectable_value(&mut page.route_mode, RouteMode::Road, "真实道路路由");
+                ui.selectable_value(&mut page.route_mode, RouteMode::Custom, "自定义路线");
                 if page.route_mode == RouteMode::Road && self.network.is_none() {
                     ui.colored_label(theme::warn(), "（需先在「路网」页导入 OSM）");
                 }
@@ -422,6 +438,57 @@ impl App {
                     if page.ordinary_pick != before {
                         page.preview_stale = true;
                     }
+                });
+            }
+            if page.route_mode == RouteMode::Custom {
+                mobile::row(ui, |ui| {
+                    ui.label("高德 Key：");
+                    mobile::text_edit(
+                        ui,
+                        "run_amap_key",
+                        &mut page.amap_key,
+                        crate::platform::InputKind::Text,
+                        200.0,
+                    );
+                    ui.label("（高德开放平台 Web 服务）");
+                });
+                mobile::row(ui, |ui| {
+                    ui.label("起点：");
+                    mobile::text_edit(
+                        ui,
+                        "run_custom_origin",
+                        &mut page.custom_origin,
+                        crate::platform::InputKind::Text,
+                        150.0,
+                    );
+                });
+                mobile::row(ui, |ui| {
+                    ui.label("终点：");
+                    mobile::text_edit(
+                        ui,
+                        "run_custom_destination",
+                        &mut page.custom_destination,
+                        crate::platform::InputKind::Text,
+                        150.0,
+                    );
+                    ui.label("地址或 经度,纬度");
+                });
+                mobile::row(ui, |ui| {
+                    ui.checkbox(&mut page.custom_loop, "绕圈跑（去程+返程闭环）");
+                    ui.label("圈数：");
+                    mobile::drag_i64(ui, "run_custom_laps", &mut page.custom_laps, 0..=99, 1.0, "", "（0=按距离自动）");
+                });
+                mobile::row(ui, |ui| {
+                    let busy = page.custom_status.starts_with("获取中");
+                    let btn = if busy {
+                        theme::primary_btn("获取中…")
+                    } else {
+                        theme::primary_btn("获取路线")
+                    };
+                    if ui.add_enabled(!busy, btn).clicked() {
+                        custom_fetch_wanted = true;
+                    }
+                    ui.label(&page.custom_status);
                 });
             }
             mobile::row(ui, |ui| {
@@ -487,6 +554,9 @@ impl App {
                 ui.label("（全绿色可避免详情页出现灰色分段）");
             });
         }
+        if custom_fetch_wanted {
+            self.refresh_custom_route();
+        }
 
         // 切换到真实道路路由时按需拉取电子围栏与实时点位（经典模式不触发这些端点）。
         if self.run_page.route_mode == RouteMode::Road && prev_route != RouteMode::Road {
@@ -530,6 +600,7 @@ impl App {
         });
 
         self.draw_run_map(ui);
+        self.draw_custom_map(ui);
 
         ui.add_space(8.0);
         let enabled = !self.run_busy && self.session.is_some();
@@ -775,6 +846,144 @@ impl App {
         self.run_page.map.interact(ui, canvas);
     }
 
+    /// 自定义路线预览：绘制高德闭环路线与打卡点（无 OSM 路网底图）。
+    fn draw_custom_map(&mut self, ui: &mut egui::Ui) {
+        if self.run_page.route_mode != RouteMode::Custom {
+            return;
+        }
+        let Some(ring) = self.run_page.custom_preview.clone() else {
+            return;
+        };
+        ui.add_space(4.0);
+        super::map::legend(
+            ui,
+            &[
+                ("路线", egui::Color32::from_rgb(30, 111, 216)),
+                ("打卡点", egui::Color32::from_rgb(240, 180, 0)),
+                ("起点", egui::Color32::from_rgb(22, 160, 90)),
+                ("终点", egui::Color32::from_rgb(220, 38, 38)),
+            ],
+        );
+        let rect = ui.available_rect_before_wrap();
+        let (response, painter) = ui.allocate_painter(
+            egui::Vec2::new(rect.width().max(200.0), 220.0),
+            egui::Sense::drag(),
+        );
+        let canvas = response.rect;
+        painter.rect_filled(
+            canvas,
+            egui::Rounding::ZERO,
+            egui::Color32::from_rgb(250, 252, 251),
+        );
+        if !self.run_page.map_fitted {
+            let mut bounds: Vec<(f64, f64)> = ring.points_bd.clone();
+            if let Some((_ts, pts)) = self
+                .identity
+                .anchor_coordinate()
+                .ok()
+                .and_then(crate::api::model::load_points_cache_for)
+            {
+                bounds.extend(crate::api::points::points_bd(&pts));
+            }
+            if !bounds.is_empty() {
+                self.run_page.map.fit(canvas, &bounds);
+                self.run_page.map_fitted = true;
+            }
+        }
+        let route_c = egui::Color32::from_rgb(30, 111, 216);
+        self.run_page
+            .map
+            .draw_polyline(&painter, canvas, &ring.points_bd, route_c, 2.5);
+        if let Some((_ts, pts)) = self
+            .identity
+            .anchor_coordinate()
+            .ok()
+            .and_then(crate::api::model::load_points_cache_for)
+        {
+            let cp = egui::Color32::from_rgb(240, 180, 0);
+            for (la, lo) in crate::api::points::points_bd(&pts) {
+                self.run_page.map.draw_point(&painter, canvas, la, lo, cp, 3.0);
+            }
+        }
+        if let Some(first) = ring.points_bd.first() {
+            self.run_page.map.draw_point(
+                &painter,
+                canvas,
+                first.0,
+                first.1,
+                egui::Color32::from_rgb(22, 160, 90),
+                4.5,
+            );
+        }
+        if let Some(last) = ring.points_bd.last() {
+            self.run_page.map.draw_point(
+                &painter,
+                canvas,
+                last.0,
+                last.1,
+                egui::Color32::from_rgb(220, 38, 38),
+                4.5,
+            );
+        }
+        let label = format!(
+            "高德路线：去程 {:.0} m · 闭环 {:.0} m · {} 点",
+            ring.leg_length_m,
+            ring.total_length_m,
+            ring.points_bd.len()
+        );
+        painter.text(
+            egui::Pos2::new(canvas.left() + 8.0, canvas.top() + 8.0),
+            egui::Align2::LEFT_TOP,
+            label,
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgb(88, 104, 99),
+        );
+        self.run_page.map.interact(ui, canvas);
+    }
+
+    /// 后台获取高德自定义路线（不登录、不访问学校服务器）。
+    pub(crate) fn refresh_custom_route(&mut self) {
+        let spec = crate::track::custom::CustomRouteSpec {
+            origin: self.run_page.custom_origin.trim().to_string(),
+            destination: self.run_page.custom_destination.trim().to_string(),
+            loop_mode: self.run_page.custom_loop,
+            laps: self.run_page.custom_laps,
+        };
+        if !spec.is_valid() {
+            self.run_page.custom_status = "请填写起点与终点".into();
+            return;
+        }
+        let key = if self.run_page.amap_key.trim().is_empty() {
+            self.config.amap_key.clone()
+        } else {
+            self.run_page.amap_key.trim().to_string()
+        };
+        // 立即持久化，避免仅预览未开跑时重启丢失 key/起终点
+        self.config.amap_key = key.clone();
+        self.config.custom_origin = spec.origin.clone();
+        self.config.custom_destination = spec.destination.clone();
+        self.config.custom_loop = spec.loop_mode;
+        self.config.custom_laps = spec.laps;
+        let _ = crate::api::model::save_config(&self.config);
+        self.run_page.custom_status = "获取中…".into();
+        self.spawn_job(move |tx| {
+            let payload = match crate::amap::fetch_custom_ring(&spec, &key) {
+                Ok(ring) => {
+                    let msg = format!(
+                        "√ 去程 {:.0} m · 闭环 {:.0} m（{}）",
+                        ring.leg_length_m,
+                        ring.total_length_m,
+                        if ring.loop_mode { "绕圈" } else { "单程" }
+                    );
+                    serde_json::json!({ "ok": true, "ring": ring, "message": msg })
+                }
+                Err(e) => serde_json::json!({ "ok": false, "message": e }),
+            };
+            tx.send(format!("{}{}", crate::ui::CUSTOM_ROUTE_DONE, payload))
+                .ok();
+        });
+    }
+
     fn start_run(&mut self) {
         // 参数变更时补齐方案；提交直接使用预计算值
         self.run_page.ensure_plan();
@@ -816,6 +1025,21 @@ impl App {
             spec => spec,
         };
         let track_color_mode = page.track_color_mode;
+        let custom = if route_mode == RouteMode::Custom {
+            Some(crate::track::custom::CustomRouteSpec {
+                origin: page.custom_origin.trim().to_string(),
+                destination: page.custom_destination.trim().to_string(),
+                loop_mode: page.custom_loop,
+                laps: page.custom_laps,
+            })
+        } else {
+            None
+        };
+        let amap_key = if page.amap_key.trim().is_empty() {
+            self.config.amap_key.clone()
+        } else {
+            page.amap_key.trim().to_string()
+        };
         self.config.dist_min = page.dist_min;
         self.config.dist_max = page.dist_max;
         self.config.pace_min = page.pace_min;
@@ -824,13 +1048,18 @@ impl App {
         self.config.manual_altitude = manual_altitude;
         self.config.manual_altitude_range = manual_altitude_range;
         self.config.ordinary_pick = ordinary_pick;
-        self.config.route_mode = if route_mode == RouteMode::Road {
-            "road".into()
-        } else {
-            "legacy".into()
+        self.config.route_mode = match route_mode {
+            RouteMode::Road => "road".into(),
+            RouteMode::Custom => "custom".into(),
+            RouteMode::Legacy => "legacy".into(),
         };
         self.config.track_spec = track_spec;
         self.config.track_color_mode = track_color_mode;
+        self.config.amap_key = page.amap_key.trim().to_string();
+        self.config.custom_origin = page.custom_origin.trim().to_string();
+        self.config.custom_destination = page.custom_destination.trim().to_string();
+        self.config.custom_loop = page.custom_loop;
+        self.config.custom_laps = page.custom_laps;
         let _ = crate::api::model::save_config(&self.config);
 
         let identity = self.identity.clone();
@@ -859,6 +1088,8 @@ impl App {
                 route_mode,
                 ordinary_pick,
                 track_spec,
+                custom,
+                amap_key,
             };
             let payload = match crate::api::flow::run_full_flow(&mut client, &params, &mut log) {
                 Ok(out) => {

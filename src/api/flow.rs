@@ -8,6 +8,7 @@ use super::policy::fetch_policy;
 use super::records::fetch_one_record;
 use super::submit::{submit_record, SubmitParams, SubmitResult};
 use crate::location::Coordinate;
+use crate::track::custom::CustomRouteSpec;
 use crate::track::generate_road::RouteMode;
 use crate::track::generator::build_with_color_mode as gen_track;
 use crate::track::wire::{
@@ -17,7 +18,7 @@ use crate::track::wire::{
 use rand_distr::{Distribution, Normal};
 use serde_json::{json, Value};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RunParams {
     /// 距离（米）与时长（秒）已由 UI 参数解析。
     pub dist: f64,
@@ -38,6 +39,10 @@ pub struct RunParams {
     pub ordinary_pick: usize,
     /// Optional standard athletics-track preset; Auto preserves route_mode behavior.
     pub track_spec: crate::track::stadium::TrackSpec,
+    /// 自定义路线参数（route_mode == Custom 时使用）。
+    pub custom: Option<CustomRouteSpec>,
+    /// 高德 Web 服务 Key（自定义路线用；为空时读 config.amap_key）。
+    pub amap_key: String,
 }
 
 pub struct RunOutcome {
@@ -347,7 +352,7 @@ pub fn run_full_flow(
         }
     }
     // 平均配速须落在有效窗口内（否则逐点速度无法全窗内），越界时修正时长
-    let mut params = *params;
+    let mut params = params.clone();
     let avg = params.dist / params.dur as f64;
     let fixed_avg = avg.clamp(
         crate::track::generator::SPEED_FLOOR + 0.1,
@@ -481,8 +486,22 @@ pub fn run_full_flow(
             &pts_bd,
             params.track_color_mode,
         ),
+        RouteMode::Custom => match build_custom_track(&params, &pol.must_points, &pts_bd, start_ms, log) {
+            Ok(t) => t,
+            Err(e) => {
+                log(&format!("⚠ [track] 自定义路线失败，回退经典算法: {e}"));
+                gen_track(
+                    params.dist,
+                    params.dur,
+                    params.seed,
+                    (anchor.latitude, anchor.longitude),
+                    start_ms,
+                    &pts_bd,
+                    params.track_color_mode,
+                )
+            }
         }
-    };
+    }};
     if let Some(range) = params.manual_altitude_range {
         crate::track::altitude::override_bd_a_range(&mut track, range)?;
         log(&format!(
@@ -581,6 +600,70 @@ pub fn run_full_flow(
     })
 }
 
+/// 自定义路线轨迹生成（模式 C）：高德拉取闭环 → 距离/圈数换算 → 走点 → 吸附与告警。
+fn build_custom_track(
+    params: &RunParams,
+    must_bd: &[(f64, f64)],
+    pts_bd: &[(f64, f64)],
+    start_ms: i64,
+    log: &mut dyn FnMut(&str),
+) -> Result<crate::track::model::Track, String> {
+    let spec = params
+        .custom
+        .as_ref()
+        .filter(|s| s.is_valid())
+        .ok_or("自定义路线缺少起点/终点")?;
+    let key = params
+        .amap_key
+        .trim()
+        .to_string();
+    let ring = crate::amap::fetch_custom_ring(spec, &key)?;
+    log(&format!(
+        "√ [track] 高德路线：去程 {:.0} m · 闭环 {:.0} m · {} 点（{}）",
+        ring.leg_length_m,
+        ring.total_length_m,
+        ring.points_bd.len(),
+        if ring.loop_mode { "绕圈" } else { "单程" }
+    ));
+    let (d_eff, dur_eff, note) =
+        crate::track::custom::effective_dist_dur(spec, &ring, params.dist, params.dur)?;
+    log(&format!("[track] {note} → 距离 {:.0} m / {dur_eff}s", d_eff));
+    let track = crate::track::custom::build_custom(d_eff, dur_eff, params.seed, start_ms, &ring, pts_bd);
+    // 必经点告警：自定义路线不强制改道，必经点不在路线附近时提示可能不计成绩
+    for (i, &(mlat, mlon)) in must_bd.iter().enumerate() {
+        let mut best = f64::INFINITY;
+        for q in &track.locations {
+            let dd = ((q.gLat - mlat) * crate::track::geom::MET_PER_DEG_LAT).powi(2)
+                + ((q.gLng - mlon) * crate::track::geom::MET_PER_DEG_LNG).powi(2);
+            best = best.min(dd);
+        }
+        if best > 40.0 * 40.0 {
+            log(&format!(
+                "⚠ [track] 必经点[{i}] 不在自定义路线附近（最近 {:.0} m），本次可能不计入有效成绩",
+                best.sqrt()
+            ));
+        }
+    }
+    // 打卡点吸附统计
+    let mut snapped = 0usize;
+    for pl in pts_bd {
+        let mut best = f64::INFINITY;
+        for q in &track.locations {
+            let dd = ((q.gLat - pl.0) * crate::track::geom::MET_PER_DEG_LAT).powi(2)
+                + ((q.gLng - pl.1) * crate::track::geom::MET_PER_DEG_LNG).powi(2);
+            best = best.min(dd);
+        }
+        if best <= 40.0 * 40.0 {
+            snapped += 1;
+        }
+    }
+    log(&format!(
+        "[track] 打卡点吸附 {snapped}/{}（距路线 <40m 才会吸附）",
+        pts_bd.len()
+    ));
+    Ok(track)
+}
+
 /// AI 提交流（UI 线程用）。
 pub fn run_ai_submit(
     client: &mut ApiClient,
@@ -612,6 +695,8 @@ mod tests {
             route_mode: RouteMode::Legacy,
             ordinary_pick: 0,
             track_spec: crate::track::stadium::TrackSpec::Auto,
+            custom: None,
+            amap_key: String::new(),
         }
     }
 

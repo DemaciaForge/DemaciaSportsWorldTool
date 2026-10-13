@@ -46,6 +46,7 @@ pub const UPDATE_PROG: &str = "__UPDATE_PROG__";
 pub const UPDATE_DONE: &str = "__UPDATE_DONE__";
 pub const FENCE_DONE: &str = "__FENCE_DONE__";
 pub const POINTS_DONE: &str = "__POINTS_DONE__";
+pub const CUSTOM_ROUTE_DONE: &str = "__CUSTOM_ROUTE_DONE__";
 
 /// 提交结果弹窗。
 pub struct PopupInfo {
@@ -373,6 +374,13 @@ impl App {
                 preview: None,
                 preview_stale: true,
                 map_fitted: false,
+                custom_origin: config.custom_origin.clone(),
+                custom_destination: config.custom_destination.clone(),
+                custom_loop: config.custom_loop,
+                custom_laps: config.custom_laps,
+                amap_key: config.amap_key.clone(),
+                custom_preview: None,
+                custom_status: String::new(),
             },
             ai_page: ai::AiPage {
                 days: 1,
