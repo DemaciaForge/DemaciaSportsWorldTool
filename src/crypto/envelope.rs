@@ -23,7 +23,8 @@ pub const KEYDATA_TWO: &str = "5K0E8400-E29";
 pub const KEYDATA_THREE: &str = "597DEA1AFB49";
 
 /// native reqKey 白名单字符池。
-pub const SALT_ALPHABET: &str = "+kot8A*B45jF6CD@a!UVWubcdKLZ{efgMpNOxyz01PQ}Rn)Tvw23XYh(iG7rsEqJHI9+Slm/";
+pub const SALT_ALPHABET: &str =
+    "+kot8A*B45jF6CD@a!UVWubcdKLZ{efgMpNOxyz01PQ}Rn)Tvw23XYh(iG7rsEqJHI9+Slm/";
 
 /// 客户端内置 RSA-1024 公钥（SPKI PEM）。
 pub const RSA_PUB_PEM: &str = "-----BEGIN PUBLIC KEY-----\n\
@@ -67,7 +68,8 @@ pub fn b64_encode(data: &[u8]) -> String {
 }
 
 pub fn b64_decode(data: &str) -> Result<Vec<u8>, String> {
-    B64.decode(data).map_err(|e| format!("base64 解码失败: {e}"))
+    B64.decode(data)
+        .map_err(|e| format!("base64 解码失败: {e}"))
 }
 
 /// AES-128-CBC / PKCS7 / IV=0 加密（请求 d 与响应两层解密同参数）。
@@ -152,7 +154,7 @@ impl EnvelopeSession {
         Self { four: None }
     }
 
-        pub fn key_data(&mut self) -> [String; 4] {
+    pub fn key_data(&mut self) -> [String; 4] {
         if self.four.is_none() {
             self.four = Some(key_data_four_from_ms(now_ms() as f64));
         }
@@ -167,7 +169,9 @@ impl EnvelopeSession {
     /// 测试注入固定 Four。
     #[allow(dead_code)]
     pub fn with_four(four: &str) -> Self {
-        Self { four: Some(four.to_string()) }
+        Self {
+            four: Some(four.to_string()),
+        }
     }
 }
 
@@ -183,7 +187,11 @@ pub struct BuiltEnvelope {
     pub key_data: [String; 4],
 }
 
-pub fn build_envelope(session: &mut EnvelopeSession, plain: &str, order: OuterOrder) -> BuiltEnvelope {
+pub fn build_envelope(
+    session: &mut EnvelopeSession,
+    plain: &str,
+    order: OuterOrder,
+) -> BuiltEnvelope {
     build_envelope_ts(session, plain, order, now_ms())
 }
 
@@ -208,19 +216,40 @@ pub fn build_envelope_ts(
         B64.encode(ct)
     };
     let json = serialize_envelope_fields(&d, &h, &k, order);
-    BuiltEnvelope { json, container, req_key: rk, ts_ms, key_data }
+    BuiltEnvelope {
+        json,
+        container,
+        req_key: rk,
+        ts_ms,
+        key_data,
+    }
 }
 
 /// inner container：固定键序紧凑 JSON（UTF-8 字节）。
 pub fn serialize_container(data_b64: &str, ts_ms: i64, key_data: &[String; 4]) -> Vec<u8> {
     let mut m = serde_json::Map::new();
-    m.insert("data".into(), serde_json::Value::String(data_b64.to_string()));
+    m.insert(
+        "data".into(),
+        serde_json::Value::String(data_b64.to_string()),
+    );
     m.insert("timeStamp".into(), serde_json::Value::from(ts_ms));
     m.insert("platform".into(), serde_json::Value::from(1));
-    m.insert("keyDataOne".into(), serde_json::Value::String(key_data[0].clone()));
-    m.insert("keyDataTwo".into(), serde_json::Value::String(key_data[1].clone()));
-    m.insert("keyDataThree".into(), serde_json::Value::String(key_data[2].clone()));
-    m.insert("keyDataFour".into(), serde_json::Value::String(key_data[3].clone()));
+    m.insert(
+        "keyDataOne".into(),
+        serde_json::Value::String(key_data[0].clone()),
+    );
+    m.insert(
+        "keyDataTwo".into(),
+        serde_json::Value::String(key_data[1].clone()),
+    );
+    m.insert(
+        "keyDataThree".into(),
+        serde_json::Value::String(key_data[2].clone()),
+    );
+    m.insert(
+        "keyDataFour".into(),
+        serde_json::Value::String(key_data[3].clone()),
+    );
     serde_json::to_vec(&serde_json::Value::Object(m)).unwrap_or_default()
 }
 
@@ -228,9 +257,13 @@ pub fn serialize_container(data_b64: &str, ts_ms: i64, key_data: &[String; 4]) -
 pub fn serialize_envelope_fields(d: &str, h: &str, k: &str, order: OuterOrder) -> String {
     match order {
         // observed: k,p,d,h,t（真实 headerSign 样本序）
-        OuterOrder::Observed => format!("{{\"k\":\"{k}\",\"p\":101,\"d\":\"{d}\",\"h\":\"{h}\",\"t\":0}}"),
+        OuterOrder::Observed => {
+            format!("{{\"k\":\"{k}\",\"p\":101,\"d\":\"{d}\",\"h\":\"{h}\",\"t\":0}}")
+        }
         // insert: d,h,k,p,t（body 插入序）
-        OuterOrder::Insert => format!("{{\"d\":\"{d}\",\"h\":\"{h}\",\"k\":\"{k}\",\"p\":101,\"t\":0}}"),
+        OuterOrder::Insert => {
+            format!("{{\"d\":\"{d}\",\"h\":\"{h}\",\"k\":\"{k}\",\"p\":101,\"t\":0}}")
+        }
     }
 }
 
@@ -286,7 +319,10 @@ mod tests {
     /// keyDataFour：native %f 语义（毫秒 double 6 位小数取末 12 字符）。
     #[test]
     fn test_key_data_four() {
-        assert_eq!(key_data_four_from_ms(1_788_958_186_123.456_8), "86123.456787");
+        assert_eq!(
+            key_data_four_from_ms(1_788_958_186_123.456_8),
+            "86123.456787"
+        );
         // 长度规则
         let four = key_data_four_from_ms(1_788_958_186_123.0);
         assert_eq!(four.len(), 12);
@@ -338,7 +374,9 @@ mod tests {
     fn test_rsa_encrypt_len() {
         let pk = rsa_public_key();
         let mut rng = rand::thread_rng();
-        let ct = pk.encrypt(&mut rng, rsa::Pkcs1v15Encrypt, b"0123456789abcdef").unwrap();
+        let ct = pk
+            .encrypt(&mut rng, rsa::Pkcs1v15Encrypt, b"0123456789abcdef")
+            .unwrap();
         assert_eq!(ct.len(), 128);
     }
 }

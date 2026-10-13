@@ -38,7 +38,10 @@ pub fn derive_paes_key(one: &str, two: &str, three: &str, four: &str) -> [u8; 16
     let vals = [one, two, three, four];
     for v in &vals {
         let l = c_string_bytes(v).len();
-        assert!((8..=12).contains(&l), "keyData UTF-8 长度必须为 8..12B: {v}");
+        assert!(
+            (8..=12).contains(&l),
+            "keyData UTF-8 长度必须为 8..12B: {v}"
+        );
     }
     let (a, b, c, d) = (fold32(one), fold32(two), fold32(three), fold32(four));
 
@@ -74,7 +77,10 @@ pub fn derive_paes_key(one: &str, two: &str, three: &str, four: &str) -> [u8; 16
 }
 
 /// RSA-1024 公钥 raw 运算恢复 response.s 的 MD5 hex（PKCS#1 type-1 块）。
-pub fn rsa_recovered_digest(response_s: &str, pub_key: &rsa::RsaPublicKey) -> Result<String, String> {
+pub fn rsa_recovered_digest(
+    response_s: &str,
+    pub_key: &rsa::RsaPublicKey,
+) -> Result<String, String> {
     let sig = super::envelope::b64_decode(response_s)?;
     let n = pub_key.n().to_bytes_be();
     let size = n.len();
@@ -104,7 +110,11 @@ pub fn rsa_recovered_digest(response_s: &str, pub_key: &rsa::RsaPublicKey) -> Re
         return Err("s 的 RSA PKCS#1 type-1 填充不合法".into());
     }
     let digest = &em[marker + 1..];
-    if digest.len() != 32 || !digest.iter().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
+    if digest.len() != 32
+        || !digest
+            .iter()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
         return Err("RSA(s) 尾部不是 32 字节小写 hex".into());
     }
     Ok(String::from_utf8_lossy(digest).into_owned())
@@ -131,13 +141,12 @@ pub fn decrypt_response(
     pub_key: &rsa::RsaPublicKey,
 ) -> Result<Decrypted, String> {
     let text = String::from_utf8_lossy(raw).into_owned();
-    let mut obj: Value = serde_json::from_str(text.trim())
-        .map_err(|e| format!("响应不是合法 JSON: {e}"))?;
+    let mut obj: Value =
+        serde_json::from_str(text.trim()).map_err(|e| format!("响应不是合法 JSON: {e}"))?;
     if let Some(resp) = obj.get("resp") {
         if resp.is_string() {
             let inner = resp.as_str().unwrap();
-            obj = serde_json::from_str(inner)
-                .map_err(|e| format!("resp 包装解析失败: {e}"))?;
+            obj = serde_json::from_str(inner).map_err(|e| format!("resp 包装解析失败: {e}"))?;
         } else if !resp.is_null() {
             obj = resp.clone();
         }
@@ -171,17 +180,17 @@ pub fn decrypt_response(
         return Err(format!("响应验签失败: 实际 MD5 {actual} 期望 {expected}"));
     }
     let plaintext = String::from_utf8_lossy(&layer1).into_owned();
-    let env: Value = serde_json::from_str(&plaintext)
-        .map_err(|e| {
-            format!(
-                "内层信封 JSON 解析失败: {e} / 前64B: {}",
-                crate::textlog::truncate(&plaintext, 64)
-            )
-        })?;
+    let env: Value = serde_json::from_str(&plaintext).map_err(|e| {
+        format!(
+            "内层信封 JSON 解析失败: {e} / 前64B: {}",
+            crate::textlog::truncate(&plaintext, 64)
+        )
+    })?;
     // 双层（信封含 d 再解一层）或单层（r 明文即业务包裹）兼容
     let outer = match env.get("d").and_then(|d| d.as_str()) {
         Some(d) => {
-            let layer2 = super::envelope::aes128_cbc_decrypt(key, &super::envelope::b64_decode(d)?)?;
+            let layer2 =
+                super::envelope::aes128_cbc_decrypt(key, &super::envelope::b64_decode(d)?)?;
             serde_json::from_slice::<Value>(&layer2)
                 .map_err(|e| format!("第二层明文 JSON 解析失败: {e}"))?
         }
@@ -219,10 +228,15 @@ mod tests {
             .iter()
             .map(|v| format!("0x{:08x}", fold32(v)))
             .collect();
-        assert_eq!(folds, ["0x61297d61", "0x203a324c", "0x363a323c", "0x3d2f3d3e"]);
+        assert_eq!(
+            folds,
+            ["0x61297d61", "0x203a324c", "0x363a323c", "0x3d2f3d3e"]
+        );
         let key = derive_paes_key(one, two, three, four);
-        assert_eq!(key.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-                   "faaed5a4d99af386a7d3f5d109071f13");
+        assert_eq!(
+            key.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+            "faaed5a4d99af386a7d3f5d109071f13"
+        );
     }
 
     /// RSA(s) 恢复逻辑：自造 type-1 块签名（无真私钥，用测试密钥对验证块格式/恢复）。
@@ -280,7 +294,10 @@ mod tests {
         let key = derive_paes_key(&key_data[0], &key_data[1], &key_data[2], &key_data[3]);
 
         let business = r#"{"error":10000,"message":"成功","data":"{\"k\":1}"}"#;
-        let layer2 = format!("{{\"data\":\"{}\",\"timeStamp\":123}}", b64_encode(business.as_bytes()));
+        let layer2 = format!(
+            "{{\"data\":\"{}\",\"timeStamp\":123}}",
+            b64_encode(business.as_bytes())
+        );
         let inner_env = format!(
             "{{\"k\":\"x\",\"p\":101,\"d\":\"{}\",\"h\":\"y\",\"t\":0}}",
             b64_encode(&aes128_cbc_encrypt(&key, layer2.as_bytes()).unwrap())
@@ -299,7 +316,12 @@ mod tests {
     #[test]
     fn test_decrypt_never_panics_on_garbage() {
         let pub_key = crate::crypto::envelope::rsa_public_key();
-        let key = derive_paes_key("nhang.school", "5K0E8400-E29", "597DEA1AFB49", "86123.456789");
+        let key = derive_paes_key(
+            "nhang.school",
+            "5K0E8400-E29",
+            "597DEA1AFB49",
+            "86123.456789",
+        );
         let cases: Vec<Vec<u8>> = vec![
             Vec::new(),
             b"not json at all".to_vec(),

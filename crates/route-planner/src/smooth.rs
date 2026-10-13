@@ -31,6 +31,7 @@ fn len2(a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 /// 圆弧切角：返回 (切点1, 切点2, 圆心, 有向转角)，None 表示转角过缓不切。
+#[allow(clippy::type_complexity)]
 fn corner_fillet(
     a: [f64; 2],
     b: [f64; 2],

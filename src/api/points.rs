@@ -41,6 +41,7 @@ pub fn fetch_points_context(
 }
 
 /// run_area_id：学校配置了区域时 App 会附带；未配置则不传（与 App 一致）。
+#[allow(dead_code)]
 pub fn fetch_points_ext(
     client: &mut ApiClient,
     anchor: Coordinate,
@@ -59,9 +60,12 @@ pub fn fetch_points_context_ext(
     anchor.validate()?;
     // ① TTL 内命中缓存直接返回
     if let Some((ts, pts, area)) = model::load_points_cache_context_for(anchor) {
-        if !pts.is_empty() && crate::crypto::envelope::now_ms() - ts < model::POINTS_TTL_MS
-        {
-            log(&format!("[points] 缓存命中（{} 秒前，{} 点）", (crate::crypto::envelope::now_ms() - ts) / 1000, pts.len()));
+        if !pts.is_empty() && crate::crypto::envelope::now_ms() - ts < model::POINTS_TTL_MS {
+            log(&format!(
+                "[points] 缓存命中（{} 秒前，{} 点）",
+                (crate::crypto::envelope::now_ms() - ts) / 1000,
+                pts.len()
+            ));
             return Ok(PointsContext { points: pts, area });
         }
     }
@@ -77,7 +81,12 @@ pub fn fetch_points_context_ext(
     let url = format!("{}{}", model::HOST, POINTS_PATH);
 
     let start_ms = crate::crypto::envelope::now_ms();
-    let runec_input = format!("{uid}{}{}{}", six_digit(lon), six_digit(lat), (start_ms / 1000) * 1000);
+    let runec_input = format!(
+        "{uid}{}{}{}",
+        six_digit(lon),
+        six_digit(lat),
+        (start_ms / 1000) * 1000
+    );
     let runec_env = build_envelope(&mut client.session, &runec_input, OuterOrder::Observed);
     let runec = runec_env.json;
 
@@ -119,7 +128,10 @@ pub fn fetch_points_context_ext(
     let err = payload.get("error").and_then(|e| e.as_i64()).unwrap_or(0);
     log(&format!(
         "[points] 接口无点位 error={err}: {}",
-        payload.get("message").and_then(|m| m.as_str()).unwrap_or("")
+        payload
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
     ));
     fallback(log)
 }
@@ -134,7 +146,9 @@ fn extract_points(payload: &Value) -> Vec<Value> {
         .or_else(|| find_checkpoint_fallback(payload, 8, false))
         .and_then(|value| match value {
             Value::Array(items) => Some(items),
-            Value::String(text) => serde_json::from_str::<Value>(&text).ok().and_then(|v| v.as_array().cloned()),
+            Value::String(text) => serde_json::from_str::<Value>(&text)
+                .ok()
+                .and_then(|v| v.as_array().cloned()),
             _ => None,
         })
         .unwrap_or_default()
@@ -154,9 +168,11 @@ fn find_checkpoint_fallback(root: &Value, depth: usize, inside_fence: bool) -> O
                 }
             }
             for (key, value) in map {
-                if let Some(found) =
-                    find_checkpoint_fallback(value, depth - 1, inside_fence || key.to_ascii_lowercase().contains("fence"))
-                {
+                if let Some(found) = find_checkpoint_fallback(
+                    value,
+                    depth - 1,
+                    inside_fence || key.to_ascii_lowercase().contains("fence"),
+                ) {
                     return Some(found);
                 }
             }
@@ -181,7 +197,9 @@ fn find_checkpoint_fallback(root: &Value, depth: usize, inside_fence: bool) -> O
 /// 在业务响应的多层 data/result/runArea 包装中查找字段。接口版本之间字段
 /// 的层级不同，不能只读取顶层，否则围栏会被丢掉而详情页只显示灰线。
 fn find_value_recursive(root: &Value, names: &[&str], depth: usize) -> Option<Value> {
-    if depth == 0 { return None; }
+    if depth == 0 {
+        return None;
+    }
     match root {
         Value::Object(map) => {
             for name in names {
@@ -190,12 +208,16 @@ fn find_value_recursive(root: &Value, names: &[&str], depth: usize) -> Option<Va
                 }
             }
             for value in map.values() {
-                if let Some(found) = find_value_recursive(value, names, depth - 1) { return Some(found); }
+                if let Some(found) = find_value_recursive(value, names, depth - 1) {
+                    return Some(found);
+                }
             }
         }
         Value::Array(items) => {
             for value in items {
-                if let Some(found) = find_value_recursive(value, names, depth - 1) { return Some(found); }
+                if let Some(found) = find_value_recursive(value, names, depth - 1) {
+                    return Some(found);
+                }
             }
         }
         Value::String(text) => {
@@ -208,24 +230,48 @@ fn find_value_recursive(root: &Value, names: &[&str], depth: usize) -> Option<Va
     None
 }
 
-pub(crate) fn area_from_payload(payload: &Value, points: &[Value]) -> crate::track::wire::RunAreaMeta {
+pub(crate) fn area_from_payload(
+    payload: &Value,
+    points: &[Value],
+) -> crate::track::wire::RunAreaMeta {
     let id_names = ["runAreaId", "runAreaID", "areaId", "areaID", "runId"];
     let fence_names = [
-        "geoFencesJson", "geoFenceJson", "geoFences", "geoFence", "geoFenceList",
-        "fenceList", "fences", "runAreaGeoFences", "runAreaFence",
+        "geoFencesJson",
+        "geoFenceJson",
+        "geoFences",
+        "geoFence",
+        "geoFenceList",
+        "fenceList",
+        "fences",
+        "runAreaGeoFences",
+        "runAreaFence",
     ];
-    let show_names = ["freedomShowFence", "showFence", "showGeoFence", "isShowFence"];
-    let mut run_area_id = find_nonnegative_field(payload, &id_names, 8)
-        .or_else(|| find_value_recursive(payload, &["runArea", "runAreaInfo"], 8)
-            .and_then(|value| value_as_i64(&value)).filter(|id| *id >= 0));
-    let mut fences = find_value_recursive(payload, &fence_names, 8)
-        .filter(|value| usable_fence(value));
+    let show_names = [
+        "freedomShowFence",
+        "showFence",
+        "showGeoFence",
+        "isShowFence",
+    ];
+    let mut run_area_id = find_nonnegative_field(payload, &id_names, 8).or_else(|| {
+        find_value_recursive(payload, &["runArea", "runAreaInfo"], 8)
+            .and_then(|value| value_as_i64(&value))
+            .filter(|id| *id >= 0)
+    });
+    let mut fences =
+        find_value_recursive(payload, &fence_names, 8).filter(usable_fence);
     let mut show = find_true_field(payload, &show_names, 8)
         .or_else(|| find_value_recursive(payload, &show_names, 8));
     for point in points {
-        if run_area_id.is_none() { run_area_id = find_nonnegative_field(point, &id_names, 3); }
-        if fences.is_none() { fences = find_value_recursive(point, &fence_names, 3).filter(usable_fence); }
-        if show.is_none() { show = find_true_field(point, &show_names, 3).or_else(|| find_value_recursive(point, &show_names, 3)); }
+        if run_area_id.is_none() {
+            run_area_id = find_nonnegative_field(point, &id_names, 3);
+        }
+        if fences.is_none() {
+            fences = find_value_recursive(point, &fence_names, 3).filter(usable_fence);
+        }
+        if show.is_none() {
+            show = find_true_field(point, &show_names, 3)
+                .or_else(|| find_value_recursive(point, &show_names, 3));
+        }
     }
     // getGeoFenceForRun 的围栏对象通常只有自身 id（例如 1774），而不重复
     // 返回 runAreaId；这个 id 就是 fixed_point_json 要回传的区域 id。
@@ -233,18 +279,25 @@ pub(crate) fn area_from_payload(payload: &Value, points: &[Value]) -> crate::tra
         run_area_id = fences.as_ref().and_then(fence_area_id);
     }
     let run_area_id = run_area_id.unwrap_or(-1);
-    let geo_fences_json = fences.as_ref()
+    let geo_fences_json = fences
+        .as_ref()
         .map(value_as_json_string)
         .filter(|value| !value.trim().is_empty() && value.trim() != "null" && value.trim() != "[]")
         .unwrap_or_else(|| "[]".into());
-    let freedom_show_fence = show.as_ref()
+    let freedom_show_fence = show
+        .as_ref()
         .and_then(value_as_bool)
         .unwrap_or(geo_fences_json.trim() != "[]");
-    crate::track::wire::RunAreaMeta { run_area_id, geo_fences_json, freedom_show_fence }
+    crate::track::wire::RunAreaMeta {
+        run_area_id,
+        geo_fences_json,
+        freedom_show_fence,
+    }
 }
 
 fn value_as_i64(value: &Value) -> Option<i64> {
-    value.as_i64()
+    value
+        .as_i64()
         .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
         .or_else(|| value.as_f64().filter(|n| n.is_finite()).map(|n| n as i64))
         .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
@@ -253,18 +306,24 @@ fn value_as_i64(value: &Value) -> Option<i64> {
 }
 
 fn value_as_bool(value: &Value) -> Option<bool> {
-    value.as_bool()
+    value
+        .as_bool()
         .or_else(|| value.as_i64().map(|n| n != 0))
-        .or_else(|| value.as_str().and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => Some(true),
-            "false" | "0" | "no" => Some(false),
-            _ => None,
-        }))
+        .or_else(|| {
+            value
+                .as_str()
+                .and_then(|s| match s.trim().to_ascii_lowercase().as_str() {
+                    "true" | "1" | "yes" => Some(true),
+                    "false" | "0" | "no" => Some(false),
+                    _ => None,
+                })
+        })
 }
 
 fn usable_fence(value: &Value) -> bool {
     let text = value_as_json_string(value);
-    serde_json::from_str::<Value>(text.trim()).ok()
+    serde_json::from_str::<Value>(text.trim())
+        .ok()
         .is_some_and(|parsed| matches!(parsed, Value::Array(items) if !items.is_empty()))
 }
 
@@ -283,21 +342,30 @@ fn fence_area_id(value: &Value) -> Option<i64> {
 }
 
 fn find_true_field(root: &Value, names: &[&str], depth: usize) -> Option<Value> {
-    if depth == 0 { return None; }
+    if depth == 0 {
+        return None;
+    }
     match root {
         Value::Object(map) => {
             for name in names {
-                if let Some(value) = map.get(*name).filter(|value| value_as_bool(value) == Some(true)) {
+                if let Some(value) = map
+                    .get(*name)
+                    .filter(|value| value_as_bool(value) == Some(true))
+                {
                     return Some(value.clone());
                 }
             }
             for value in map.values() {
-                if let Some(found) = find_true_field(value, names, depth - 1) { return Some(found); }
+                if let Some(found) = find_true_field(value, names, depth - 1) {
+                    return Some(found);
+                }
             }
         }
         Value::Array(items) => {
             for value in items {
-                if let Some(found) = find_true_field(value, names, depth - 1) { return Some(found); }
+                if let Some(found) = find_true_field(value, names, depth - 1) {
+                    return Some(found);
+                }
             }
         }
         Value::String(text) => {
@@ -311,7 +379,9 @@ fn find_true_field(root: &Value, names: &[&str], depth: usize) -> Option<Value> 
 }
 
 fn find_nonnegative_field(root: &Value, names: &[&str], depth: usize) -> Option<i64> {
-    if depth == 0 { return None; }
+    if depth == 0 {
+        return None;
+    }
     match root {
         Value::Object(map) => {
             for name in names {
@@ -320,12 +390,16 @@ fn find_nonnegative_field(root: &Value, names: &[&str], depth: usize) -> Option<
                 }
             }
             for value in map.values() {
-                if let Some(found) = find_nonnegative_field(value, names, depth - 1) { return Some(found); }
+                if let Some(found) = find_nonnegative_field(value, names, depth - 1) {
+                    return Some(found);
+                }
             }
         }
         Value::Array(items) => {
             for value in items {
-                if let Some(found) = find_nonnegative_field(value, names, depth - 1) { return Some(found); }
+                if let Some(found) = find_nonnegative_field(value, names, depth - 1) {
+                    return Some(found);
+                }
             }
         }
         Value::String(text) => {
@@ -340,21 +414,28 @@ fn find_nonnegative_field(root: &Value, names: &[&str], depth: usize) -> Option<
 
 fn value_as_json_string(value: &Value) -> String {
     match value {
-        Value::String(text) => {
-            serde_json::from_str::<Value>(text).map(|v| v.to_string()).unwrap_or_else(|_| text.clone())
-        }
+        Value::String(text) => serde_json::from_str::<Value>(text)
+            .map(|v| v.to_string())
+            .unwrap_or_else(|_| text.clone()),
         Value::Null => "[]".into(),
         other => other.to_string(),
     }
 }
 
-
 /// 点位中心（BD 系）。
 #[allow(dead_code)]
 pub fn center_bd(points: &[Value]) -> (f64, f64) {
     let n = points.len().max(1) as f64;
-    let lat = points.iter().filter_map(|p| p.get("lat").and_then(|v| v.as_f64())).sum::<f64>() / n;
-    let lon = points.iter().filter_map(|p| p.get("lon").and_then(|v| v.as_f64())).sum::<f64>() / n;
+    let lat = points
+        .iter()
+        .filter_map(|p| p.get("lat").and_then(|v| v.as_f64()))
+        .sum::<f64>()
+        / n;
+    let lon = points
+        .iter()
+        .filter_map(|p| p.get("lon").and_then(|v| v.as_f64()))
+        .sum::<f64>()
+        / n;
     (lat, lon)
 }
 
@@ -398,7 +479,11 @@ mod tests {
     #[test]
     fn area_metadata_reads_nested_json_without_fabricating_fence() {
         let payload = json!({"data": "{\"result\": {\"runArea\": {\"id\": 9}, \"pointsResModels\": [{\"lat\": 1.0, \"lon\": 2.0}]}}"});
-        let points = vec![json!({"lat": 1.0, "lon": 2.0}), json!({"lat": 1.1, "lon": 2.0}), json!({"lat": 1.1, "lon": 2.1})];
+        let points = vec![
+            json!({"lat": 1.0, "lon": 2.0}),
+            json!({"lat": 1.1, "lon": 2.0}),
+            json!({"lat": 1.1, "lon": 2.1}),
+        ];
         let area = area_from_payload(&payload, &points);
         assert_eq!(area.run_area_id, 9);
         assert!(!area.freedom_show_fence);
@@ -444,7 +529,13 @@ mod tests {
             "geoFences": [{"points": [{"lat": 1.0, "lon": 2.0}]}],
             "result": {"points": [{"lat": 39.2, "lon": 116.2}]}
         }});
-        assert_eq!(extract_points(&payload), vec![json!({"lat": 39.2, "lon": 116.2})]);
-        assert!(extract_points(&json!({"geoFences": [{"points": [{"lat": 1.0, "lon": 2.0}]}]})).is_empty());
+        assert_eq!(
+            extract_points(&payload),
+            vec![json!({"lat": 39.2, "lon": 116.2})]
+        );
+        assert!(
+            extract_points(&json!({"geoFences": [{"points": [{"lat": 1.0, "lon": 2.0}]}]}))
+                .is_empty()
+        );
     }
 }

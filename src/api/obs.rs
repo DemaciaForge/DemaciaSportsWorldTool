@@ -26,14 +26,22 @@ pub fn sign_url(client: &mut ApiClient, method: &str, key: &str) -> Result<Strin
 }
 
 /// PUT 上传 OBS 对象。
-pub fn put_object(signed_url: &str, payload: &[u8], log: &mut dyn FnMut(&str)) -> Result<(), String> {
+pub fn put_object(
+    signed_url: &str,
+    payload: &[u8],
+    log: &mut dyn FnMut(&str),
+) -> Result<(), String> {
     let agent = super::client::make_agent();
     let resp = agent
         .put(signed_url)
         .set("Content-Type", "application/json")
         .send_bytes(payload)
         .map_err(super::client::ureq_err)?;
-    log(&format!("[obs] PUT {} -> {}", shorten(signed_url), resp.status()));
+    log(&format!(
+        "[obs] PUT {} -> {}",
+        shorten(signed_url),
+        resp.status()
+    ));
     Ok(())
 }
 
@@ -63,7 +71,11 @@ fn shorten(url: &str) -> &str {
 
 /// 回读验证（GET 签名）。
 #[allow(dead_code)]
-pub fn fetch_object(client: &mut ApiClient, key: &str, log: &mut dyn FnMut(&str)) -> Result<Value, String> {
+pub fn fetch_object(
+    client: &mut ApiClient,
+    key: &str,
+    log: &mut dyn FnMut(&str),
+) -> Result<Value, String> {
     let signed = sign_url(client, "Get", key)?;
     let agent = super::client::make_agent();
     let resp = agent.get(&signed).call().map_err(super::client::ureq_err)?;
@@ -71,4 +83,3 @@ pub fn fetch_object(client: &mut ApiClient, key: &str, log: &mut dyn FnMut(&str)
     log(&format!("[obs] GET 回读 {} 字节", text.len()));
     serde_json::from_str(&text).map_err(|e| format!("OBS 对象解析失败: {e}"))
 }
-

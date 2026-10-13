@@ -6,7 +6,10 @@
 //! 哨兵点（首 type∈{0,7}、索引1 type=5、末 type=6）；结尾断崖；点位吸附。
 #![allow(non_snake_case)]
 
-use super::geom::{fmt_gain_time, make_point_ring, ring_point_at, round_to, to_bd, Rng, MET_PER_DEG_LAT, MET_PER_DEG_LNG};
+use super::geom::{
+    fmt_gain_time, make_point_ring, ring_point_at, round_to, to_bd, Rng, MET_PER_DEG_LAT,
+    MET_PER_DEG_LNG,
+};
 use super::model::{GenPoint, Segment, TenWindow, Track};
 use super::postfix::apply_post_fixes;
 
@@ -93,8 +96,13 @@ pub fn build(
             1.0
         };
         let km_done = (tt / dur_f) * dist / 1000.0;
-        let fatigue = if km_done <= 0.5 { 1.03 } else { (1.03 - 0.06 * (km_done - 0.5)).max(0.80) };
-        let wave = (1.0 + 0.010 * (std::f64::consts::TAU * tt / 115.0 + phase_v).sin()
+        let fatigue = if km_done <= 0.5 {
+            1.03
+        } else {
+            (1.03 - 0.06 * (km_done - 0.5)).max(0.80)
+        };
+        let wave = (1.0
+            + 0.010 * (std::f64::consts::TAU * tt / 115.0 + phase_v).sin()
             + 0.035 * (std::f64::consts::TAU * tt / 47.0 + phase_v * 2.3).sin()
             + 0.015 * (std::f64::consts::TAU * tt / 19.0 + phase_v * 3.7).sin())
             * dip_factor(tt);
@@ -135,8 +143,7 @@ pub fn build(
             kinds[i] = (rng.choice(&[3, 0]), 1);
         }
     }
-    let normal_idx: Vec<usize> =
-        (0..n).filter(|&i| kinds[i].0 != -1 && i > 1).collect();
+    let normal_idx: Vec<usize> = (0..n).filter(|&i| kinds[i].0 != -1 && i > 1).collect();
     let share: f64 = normal_idx.iter().map(|&i| seg_dist[i]).sum();
     let share = if share == 0.0 { 1.0 } else { share };
     let mut disp_of = vec![0.0f64; n];
@@ -183,7 +190,11 @@ pub fn build(
             px = bx + jx;
             py = by + jy;
             rad = round_to(
-                if typ == 3 { rng.uniform(1.4, 5.1) } else { rng.uniform(1.4, 2.4) },
+                if typ == 3 {
+                    rng.uniform(1.4, 5.1)
+                } else {
+                    rng.uniform(1.4, 2.4)
+                },
                 2,
             );
             state = if typ == 0 {
@@ -195,7 +206,11 @@ pub fn build(
             match lt {
                 4 => {
                     if rng.random() >= 0.68 {
-                        d_step = if rng.random() < 0.95 { rng.uniform(2.0, 60.0) } else { rng.uniform(60.0, 250.0) };
+                        d_step = if rng.random() < 0.95 {
+                            rng.uniform(2.0, 60.0)
+                        } else {
+                            rng.uniform(60.0, 250.0)
+                        };
                     }
                 }
                 1 => {
@@ -204,7 +219,11 @@ pub fn build(
                     }
                 }
                 12 => {
-                    d_step = if rng.random() < 0.9 { rng.uniform(5.0, 80.0) } else { rng.uniform(80.0, 220.0) };
+                    d_step = if rng.random() < 0.9 {
+                        rng.uniform(5.0, 80.0)
+                    } else {
+                        rng.uniform(80.0, 220.0)
+                    };
                 }
                 5 => d_step = rng.uniform(5.0, 60.0),
                 _ => d_step = rng.uniform(100.0, 300.0),
@@ -225,9 +244,23 @@ pub fn build(
                 py = y + jy;
             }
             rad = if lt == 4 {
-                round_to(if rng.random() < 0.75 { rng.uniform(30.0, 100.0) } else { rng.uniform(100.0, 550.0) }, 2)
+                round_to(
+                    if rng.random() < 0.75 {
+                        rng.uniform(30.0, 100.0)
+                    } else {
+                        rng.uniform(100.0, 550.0)
+                    },
+                    2,
+                )
             } else if lt == 1 {
-                round_to(if rng.random() < 0.75 { rng.uniform(1.6, 12.0) } else { rng.uniform(12.0, 95.0) }, 2)
+                round_to(
+                    if rng.random() < 0.75 {
+                        rng.uniform(1.6, 12.0)
+                    } else {
+                        rng.uniform(12.0, 95.0)
+                    },
+                    2,
+                )
             } else if lt == 12 {
                 round_to(rng.uniform(30.0, 125.0), 2)
             } else if lt == 5 {
@@ -243,14 +276,16 @@ pub fn build(
         let (lat, lng) = to_bd(px, py, c_lat, c_lng);
         alt += 0.04 * (82.0 - alt) + rng.gauss(0.0, alt_sigma);
         let v_now = dist / dur_f;
-        let stride_target = 0.62 + 0.17 * v_now
+        let stride_target = 0.62
+            + 0.17 * v_now
             + 0.03 * (std::f64::consts::TAU * t_acc / 200.0 + phase_l).sin()
             + rng.gauss(0.0, 0.008);
         let v_cad = v_now * (1.0 + 0.03 * (std::f64::consts::TAU * t_acc / 70.0 + phase_v).sin());
         let cad = (v_cad / stride_target * 60.0).clamp(100.0, 200.0);
         steps_acc += cad / 60.0 * dt;
         let nxt = pos(s + direction * 2.0);
-        let brg = ((nxt.0 - x).atan2(nxt.1 - y).to_degrees() + rng.gauss(0.0, 35.0)).rem_euclid(360.0);
+        let brg =
+            ((nxt.0 - x).atan2(nxt.1 - y).to_degrees() + rng.gauss(0.0, 35.0)).rem_euclid(360.0);
         // 保留累计均值与 GPS 瞬时速度的轻微波动，但不生成越出跑步区域的漂移点。
         let (avg_sp, gps_speed) = if typ == -1 {
             let avg = round_to(dist_acc / t_acc.max(1.0), 4);
@@ -278,8 +313,14 @@ pub fn build(
         while ten_t >= 10.0 {
             let k = 10.0 / ten_t; // 只取前 10s 的量，余量留给下一窗
             let (out_d, out_st) = (ten_d * k, ten_st * k);
-            ten_speed.push(TenWindow { time: 10, value: round_to(out_d, 2) });
-            ten_steps.push(TenWindow { time: 10, value: round_to(out_st, 0) });
+            ten_speed.push(TenWindow {
+                time: 10,
+                value: round_to(out_d, 2),
+            });
+            ten_steps.push(TenWindow {
+                time: 10,
+                value: round_to(out_st, 0),
+            });
             ten_t -= 10.0;
             ten_d -= out_d;
             ten_st -= out_st;
@@ -321,8 +362,14 @@ pub fn build(
     if ten_t > 1.0 {
         // 尾窗：限制放大倍数 ≤1.4
         let k = (10.0 / ten_t).min(1.4);
-        ten_speed.push(TenWindow { time: 10, value: round_to(ten_d * k, 2) });
-        ten_steps.push(TenWindow { time: 10, value: round_to(ten_st * k, 0) });
+        ten_speed.push(TenWindow {
+            time: 10,
+            value: round_to(ten_d * k, 2),
+        });
+        ten_steps.push(TenWindow {
+            time: 10,
+            value: round_to(ten_st * k, 0),
+        });
     }
 
     let mut segments: Vec<Segment> = Vec::new();

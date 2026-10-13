@@ -54,12 +54,24 @@ pub fn random_mac() -> String {
     )
 }
 
-fn default_platform() -> String { "ios".into() }
-fn default_os_version() -> String { "26.5.2".into() }
-fn default_device_name() -> String { "iPhone".into() }
-fn default_anchor_lat() -> f64 { 38.901678 }
-fn default_anchor_lon() -> f64 { 121.540241 }
-fn default_city() -> String { "大连市".into() }
+fn default_platform() -> String {
+    "ios".into()
+}
+fn default_os_version() -> String {
+    "26.5.2".into()
+}
+fn default_device_name() -> String {
+    "iPhone".into()
+}
+fn default_anchor_lat() -> f64 {
+    38.901678
+}
+fn default_anchor_lon() -> f64 {
+    121.540241
+}
+fn default_city() -> String {
+    "大连市".into()
+}
 
 impl HeaderIdentity {
     /// 返回设备页配置的锚点，并执行统一边界校验。
@@ -71,7 +83,10 @@ impl HeaderIdentity {
     pub fn has_unconfigured_default_location(&self) -> bool {
         self.city.trim().is_empty()
             || self.city.trim() == crate::location::default_city()
-            || self.anchor_coordinate().map(|c| c.is_default_dalian()).unwrap_or(true)
+            || self
+                .anchor_coordinate()
+                .map(|c| c.is_default_dalian())
+                .unwrap_or(true)
     }
 
     /// 安装时间：持久值优先；缺失时按平台惯例回退（iOS 3 天 / Android 90 天前）。
@@ -141,20 +156,44 @@ pub fn build_native_ios_header(
     let install = identity.install_time(ts);
 
     m.insert("osType".into(), serde_json::Value::String("1".into()));
-    m.insert("DeviceId".into(), serde_json::Value::String(device_id.clone()));
-    m.insert("deviceName".into(), serde_json::Value::String(identity.device_name.clone()));
+    m.insert(
+        "DeviceId".into(),
+        serde_json::Value::String(device_id.clone()),
+    );
+    m.insert(
+        "deviceName".into(),
+        serde_json::Value::String(identity.device_name.clone()),
+    );
     m.insert(
         "CustomDeviceId".into(),
         serde_json::Value::String(format!("{device_id}_iOS_sportsWorld_campus")),
     );
-    m.insert("osVersion".into(), serde_json::Value::String(identity.os_version.clone()));
+    m.insert(
+        "osVersion".into(),
+        serde_json::Value::String(identity.os_version.clone()),
+    );
     if !identity.idfa.is_empty() {
-        m.insert("IDFA".into(), serde_json::Value::String(identity.idfa.clone()));
+        m.insert(
+            "IDFA".into(),
+            serde_json::Value::String(identity.idfa.clone()),
+        );
     }
-    m.insert("logicPixel".into(), serde_json::Value::String("360x640".into()));
-    m.insert("physicPixel".into(), serde_json::Value::String("1080x1920".into()));
-    m.insert("cpuModel".into(), serde_json::Value::String("x86_64".into()));
-    m.insert("appVersion".into(), serde_json::Value::String(IOS_APP_VERSION.into()));
+    m.insert(
+        "logicPixel".into(),
+        serde_json::Value::String("360x640".into()),
+    );
+    m.insert(
+        "physicPixel".into(),
+        serde_json::Value::String("1080x1920".into()),
+    );
+    m.insert(
+        "cpuModel".into(),
+        serde_json::Value::String("x86_64".into()),
+    );
+    m.insert(
+        "appVersion".into(),
+        serde_json::Value::String(IOS_APP_VERSION.into()),
+    );
     m.insert("isRoot".into(), serde_json::Value::Bool(false));
     m.insert("appInstallTime".into(), serde_json::Value::from(install));
     let nonce = insert_uuid(&mut m);
@@ -165,7 +204,10 @@ pub fn build_native_ios_header(
         m.insert("token".into(), serde_json::Value::String(token.to_string()));
     }
     m.insert("timeStamp".into(), serde_json::Value::from(ts));
-    m.insert("studentId".into(), serde_json::Value::from(if uid >= 1 { uid } else { 0 }));
+    m.insert(
+        "studentId".into(),
+        serde_json::Value::from(if uid >= 1 { uid } else { 0 }),
+    );
     if uid >= 1 && !token.is_empty() {
         m.insert(
             "tokenSign".into(),
@@ -175,10 +217,7 @@ pub fn build_native_ios_header(
     let extra = vec![
         ("nonce".to_string(), nonce),
         ("timeStamp".to_string(), ts.to_string()),
-        (
-            "tokenSign".to_string(),
-            native_token_sign(uid, token, ts),
-        ),
+        ("tokenSign".to_string(), native_token_sign(uid, token, ts)),
     ];
     (serde_json::to_string(&m).unwrap_or_default(), extra)
 }
@@ -199,20 +238,47 @@ pub fn build_android_header(
     let ts = timestamp_ms.unwrap_or_else(now_ms);
     let install = identity.install_time(ts);
 
-    m.insert("Accept".into(), serde_json::Value::String("application/json".into()));
-    m.insert("Content-Type".into(), serde_json::Value::String("application/json".into()));
-    m.insert("appVersion".into(), serde_json::Value::String(ANDROID_APP_VERSION.into()));
+    m.insert(
+        "Accept".into(),
+        serde_json::Value::String("application/json".into()),
+    );
+    m.insert(
+        "Content-Type".into(),
+        serde_json::Value::String("application/json".into()),
+    );
+    m.insert(
+        "appVersion".into(),
+        serde_json::Value::String(ANDROID_APP_VERSION.into()),
+    );
     m.insert("osType".into(), serde_json::Value::String("0".into()));
-    m.insert("DeviceId".into(), serde_json::Value::String(device_id.clone()));
-    m.insert("osVersion".into(), serde_json::Value::String(identity.os_version.clone()));
-    m.insert("deviceName".into(), serde_json::Value::String(identity.device_name.clone()));
+    m.insert(
+        "DeviceId".into(),
+        serde_json::Value::String(device_id.clone()),
+    );
+    m.insert(
+        "osVersion".into(),
+        serde_json::Value::String(identity.os_version.clone()),
+    );
+    m.insert(
+        "deviceName".into(),
+        serde_json::Value::String(identity.device_name.clone()),
+    );
     m.insert("IMEI".into(), serde_json::Value::String(String::new()));
-    m.insert("logicPixel".into(), serde_json::Value::String("1080x2400".into()));
-    m.insert("physicPixel".into(), serde_json::Value::String("1080x2400".into()));
+    m.insert(
+        "logicPixel".into(),
+        serde_json::Value::String("1080x2400".into()),
+    );
+    m.insert(
+        "physicPixel".into(),
+        serde_json::Value::String("1080x2400".into()),
+    );
     m.insert("androidId".into(), serde_json::Value::String(String::new()));
     m.insert("blMac".into(), serde_json::Value::String(String::new()));
     m.insert("wifiMac".into(), serde_json::Value::String(String::new()));
-    m.insert("cpuModel".into(), serde_json::Value::String("arm64-v8a".into()));
+    m.insert(
+        "cpuModel".into(),
+        serde_json::Value::String("arm64-v8a".into()),
+    );
     m.insert("isRoot".into(), serde_json::Value::Bool(false));
     m.insert("appUpdateTime".into(), serde_json::Value::from(install));
     m.insert("appInstallTime".into(), serde_json::Value::from(install));
@@ -277,9 +343,20 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                "osType", "DeviceId", "deviceName", "CustomDeviceId", "osVersion",
-                "logicPixel", "physicPixel", "cpuModel", "appVersion", "isRoot",
-                "appInstallTime", "nonce", "timeStamp", "studentId"
+                "osType",
+                "DeviceId",
+                "deviceName",
+                "CustomDeviceId",
+                "osVersion",
+                "logicPixel",
+                "physicPixel",
+                "cpuModel",
+                "appVersion",
+                "isRoot",
+                "appInstallTime",
+                "nonce",
+                "timeStamp",
+                "studentId"
             ]
         );
         assert_eq!(v["osType"], "1");
@@ -289,7 +366,10 @@ mod tests {
         let v2: serde_json::Value = serde_json::from_str(&json2).unwrap();
         assert!(v2.get("tokenSign").is_some());
         assert_eq!(v2["uid"], 13056447);
-        assert_eq!(v2["tokenSign"], native_token_sign(13056447, "TOKEN", 1788958186123));
+        assert_eq!(
+            v2["tokenSign"],
+            native_token_sign(13056447, "TOKEN", 1788958186123)
+        );
     }
 
     /// Android 头键集 + osType="0"。
@@ -314,7 +394,10 @@ mod tests {
     /// 同一身份的 appInstallTime 跨请求零漂移（设备一致性防护）。
     #[test]
     fn test_install_time_stable_across_requests() {
-        let identity = HeaderIdentity { app_install_time: 1_700_000_000_000_i64, ..Default::default() };
+        let identity = HeaderIdentity {
+            app_install_time: 1_700_000_000_000_i64,
+            ..Default::default()
+        };
         let (j1, _) = build_native_ios_header(&identity, 1, "T", Some(1788958186123));
         let (j2, _) = build_native_ios_header(&identity, 1, "T", Some(1788958187000));
         let v1: serde_json::Value = serde_json::from_str(&j1).unwrap();

@@ -27,10 +27,17 @@ pub struct TemplateSummary {
 pub fn load(path: impl AsRef<Path>) -> Result<Vec<ElevationSample>, String> {
     let path = path.as_ref();
     let text = fs::read_to_string(path).map_err(|e| format!("读取模板失败: {e}"))?;
-    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let samples = if ext == "gpx" || text.contains("<trkpt") {
         parse_gpx(&text)?
-    } else if ext == "json" || text.trim_start().starts_with('{') || text.trim_start().starts_with('[') {
+    } else if ext == "json"
+        || text.trim_start().starts_with('{')
+        || text.trim_start().starts_with('[')
+    {
         parse_json(&text)?
     } else {
         return Err("仅支持 GPX 或 JSON 本地记录".into());
@@ -48,7 +55,11 @@ pub fn summarize(path: impl AsRef<Path>, samples: &[ElevationSample]) -> Templat
     let mut loss_m = 0.0;
     for pair in samples.windows(2) {
         let delta = pair[1].elevation_m - pair[0].elevation_m;
-        if delta > 0.0 { gain_m += delta; } else { loss_m -= delta; }
+        if delta > 0.0 {
+            gain_m += delta;
+        } else {
+            loss_m -= delta;
+        }
     }
     for s in samples {
         min_m = min_m.min(s.elevation_m);
@@ -74,10 +85,16 @@ fn parse_gpx(text: &str) -> Result<Vec<ElevationSample>, String> {
         let lat = attr(head, "lat");
         let lon = attr(head, "lon");
         let body = &rest[end + 1..];
-        let Some(close) = body.find("</trkpt>") else { break };
+        let Some(close) = body.find("</trkpt>") else {
+            break;
+        };
         let point = &body[..close];
         if let Some(ele) = tag_number(point, "ele") {
-            out.push(ElevationSample { latitude: lat, longitude: lon, elevation_m: ele });
+            out.push(ElevationSample {
+                latitude: lat,
+                longitude: lon,
+                elevation_m: ele,
+            });
         }
         rest = &body[close + "</trkpt>".len()..];
     }
@@ -113,16 +130,31 @@ fn parse_json(text: &str) -> Result<Vec<ElevationSample>, String> {
 
 fn collect_json(value: &Value, out: &mut Vec<ElevationSample>) {
     match value {
-        Value::Array(items) => for item in items { collect_json(item, out); },
+        Value::Array(items) => {
+            for item in items {
+                collect_json(item, out);
+            }
+        }
         Value::Object(map) => {
             let elevation = ["ele", "elevation", "altitude", "bdA"]
-                .iter().find_map(|k| number(map.get(*k)));
+                .iter()
+                .find_map(|k| number(map.get(*k)));
             if let Some(elevation_m) = elevation {
-                let latitude = ["lat", "latitude", "gLat"].iter().find_map(|k| number(map.get(*k)));
-                let longitude = ["lon", "lng", "longitude", "gLng"].iter().find_map(|k| number(map.get(*k)));
-                out.push(ElevationSample { latitude, longitude, elevation_m });
+                let latitude = ["lat", "latitude", "gLat"]
+                    .iter()
+                    .find_map(|k| number(map.get(*k)));
+                let longitude = ["lon", "lng", "longitude", "gLng"]
+                    .iter()
+                    .find_map(|k| number(map.get(*k)));
+                out.push(ElevationSample {
+                    latitude,
+                    longitude,
+                    elevation_m,
+                });
             }
-            for child in map.values() { collect_json(child, out); }
+            for child in map.values() {
+                collect_json(child, out);
+            }
         }
         _ => {}
     }

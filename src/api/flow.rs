@@ -79,7 +79,8 @@ pub fn run_full_flow(
     if !area.freedom_show_fence || area.geo_fences_json.trim() == "[]" {
         match crate::api::fence::fetch_geo_fence_with_area(client) {
             Ok(response) => {
-                if response.area.freedom_show_fence && response.area.geo_fences_json.trim() != "[]" {
+                if response.area.freedom_show_fence && response.area.geo_fences_json.trim() != "[]"
+                {
                     area = response.area;
                     log(&format!(
                         "√ [fence] 独立接口返回绿色围栏 runAreaId={}（{} 字节）",
@@ -144,7 +145,11 @@ pub fn run_full_flow(
         for (i, &(mlat, mlon)) in pol.must_points.iter().enumerate() {
             log(&format!(
                 "  [policy] must_points[{i}] BD=({mlat:.6},{mlon:.6}){}",
-                if i == 0 { "（假设为起点）" } else { "（必经点）" }
+                if i == 0 {
+                    "（假设为起点）"
+                } else {
+                    "（必经点）"
+                }
             ));
         }
     } else {
@@ -349,7 +354,14 @@ pub fn run_full_flow(
     // 从提交结果回填 track.startTime（含随机秒偏移），保证 body/OBS/flag 全链一致
     let mut track_for_obs = sp.track.clone();
     track_for_obs.startTime = result.start_ms;
-    let obj = build_obs_object_with_area(&track_for_obs, result.rrid, &result.uuid, sess.uid, &pts, &area);
+    let obj = build_obs_object_with_area(
+        &track_for_obs,
+        result.rrid,
+        &result.uuid,
+        sess.uid,
+        &pts,
+        &area,
+    );
     let payload = obj.to_string().into_bytes();
     let keys = obs_keys(&track_for_obs, result.rrid, &result.uuid);
     let obs_ok = super::obs::upload_both_keys(client, &keys, &payload, log);

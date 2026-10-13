@@ -42,7 +42,11 @@ fn fetch_list_remote(client: &mut ApiClient) -> Result<Vec<AiSport>, String> {
         .filter_map(|it| {
             Some(AiSport {
                 id: it.get("id")?.as_i64()?,
-                name: it.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                name: it
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
             })
         })
         .collect())
@@ -91,9 +95,17 @@ pub fn fetch_info(client: &mut ApiClient, sport_id: i64) -> Result<SportInfo, St
 /// 提交 AI 运动记录。字段语义对照真人记录：
 /// 计次类（type=1）score=个数、speed=0、消耗=个数×0.07；
 /// 计时类（type=2）score=用时毫秒、speed=每分钟个数、消耗=秒×0.2；坐位体前屈消耗为 0。
-pub fn upload(client: &mut ApiClient, sport_id: i64, mode: AiMode, at: Option<i64>) -> Result<Value, String> {
+pub fn upload(
+    client: &mut ApiClient,
+    sport_id: i64,
+    mode: AiMode,
+    at: Option<i64>,
+) -> Result<Value, String> {
     let now = crate::crypto::envelope::now_ms();
-    let info = fetch_info(client, sport_id).unwrap_or(SportInfo { sport_type: 1, number: 0 });
+    let info = fetch_info(client, sport_id).unwrap_or(SportInfo {
+        sport_type: 1,
+        number: 0,
+    });
     let jitter = 0.9 + rand::random::<f64>() * 0.2; // ±10%
 
     // 计次类持续频率（个/分）与计时类单次耗时（毫秒）——取自真人记录区间
@@ -105,11 +117,23 @@ pub fn upload(client: &mut ApiClient, sport_id: i64, mode: AiMode, at: Option<i6
         (2, AiMode::Minutes { minutes }) => {
             let ms = minutes * 60_000;
             let reps = (REPS_PER_MIN * minutes as f64 * jitter).round() as i64;
-            (2, ms.to_string(), ms, (reps as f64 / (ms as f64 / 1000.0) * 60.0).round() as i64, (ms / 1000) as f64 * 0.2)
+            (
+                2,
+                ms.to_string(),
+                ms,
+                (reps as f64 / (ms as f64 / 1000.0) * 60.0).round() as i64,
+                (ms / 1000) as f64 * 0.2,
+            )
         }
         (2, AiMode::Count { reps }) => {
             let ms = ((reps as f64 * MS_PER_REP * jitter) as i64).max(30_000);
-            (2, ms.to_string(), ms, (reps as f64 / (ms as f64 / 1000.0) * 60.0).round() as i64, (ms / 1000) as f64 * 0.2)
+            (
+                2,
+                ms.to_string(),
+                ms,
+                (reps as f64 / (ms as f64 / 1000.0) * 60.0).round() as i64,
+                (ms / 1000) as f64 * 0.2,
+            )
         }
         // 计次类：score=个数；speed 固定 0
         (_, AiMode::Minutes { minutes }) => {
@@ -174,10 +198,12 @@ pub struct AiRecordPage {
 }
 
 /// 拉取某项目的 AI 记录（pageSize 条，按天分组）。
-pub fn fetch_records(client: &mut ApiClient, sport_id: i64, page_size: i64) -> Result<AiRecordPage, String> {
-    let path = format!(
-        "{AI_RECORDS_PATH}?sportId={sport_id}&pageSize={page_size}&pageNum=1"
-    );
+pub fn fetch_records(
+    client: &mut ApiClient,
+    sport_id: i64,
+    page_size: i64,
+) -> Result<AiRecordPage, String> {
+    let path = format!("{AI_RECORDS_PATH}?sportId={sport_id}&pageSize={page_size}&pageNum=1");
     let biz = client.call("GET", &path, "{}", &[])?;
     let data = parse_data_field(&biz);
     let arr = data
@@ -211,9 +237,15 @@ pub fn fetch_records(client: &mut ApiClient, sport_id: i64, page_size: i64) -> R
                             has_video: r
                                 .get("mediaUrl")
                                 .or_else(|| r.get("exerciseMediaUrl"))
-                                .map(|v| !v.is_null() && v.as_str().map(|s| !s.is_empty()).unwrap_or(false))
+                                .map(|v| {
+                                    !v.is_null()
+                                        && v.as_str().map(|s| !s.is_empty()).unwrap_or(false)
+                                })
                                 .unwrap_or(false),
-                            time_consume: r.get("timeConsume").and_then(|v| v.as_i64()).unwrap_or(0),
+                            time_consume: r
+                                .get("timeConsume")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(0),
                             speed: match r.get("speed") {
                                 Some(Value::String(s)) => s.clone(),
                                 Some(Value::Number(n)) => n.to_string(),
@@ -232,7 +264,14 @@ pub fn fetch_records(client: &mut ApiClient, sport_id: i64, page_size: i64) -> R
         .collect();
     let total_count = data
         .get("totalCount")
-        .and_then(|v| v.as_str().and_then(|s| s.parse().ok()).or_else(|| v.as_i64()))
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.parse().ok())
+                .or_else(|| v.as_i64())
+        })
         .unwrap_or(0);
-    Ok(AiRecordPage { groups, total_count })
+    Ok(AiRecordPage {
+        groups,
+        total_count,
+    })
 }

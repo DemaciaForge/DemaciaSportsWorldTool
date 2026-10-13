@@ -405,11 +405,17 @@ struct PointsCache {
     freedom_show_fence: bool,
 }
 
-fn default_run_area_id() -> i64 { -1 }
-fn default_geo_fences_json() -> String { "[]".into() }
+fn default_run_area_id() -> i64 {
+    -1
+}
+fn default_geo_fences_json() -> String {
+    "[]".into()
+}
 
 /// 只返回与本次锚点相同的缓存。旧版未记录锚点的缓存会自然失效，避免串城市。
-pub fn load_points_cache_for(anchor: crate::location::Coordinate) -> Option<(i64, Vec<serde_json::Value>)> {
+pub fn load_points_cache_for(
+    anchor: crate::location::Coordinate,
+) -> Option<(i64, Vec<serde_json::Value>)> {
     load_points_cache_context_for(anchor).map(|(ts, points, _)| (ts, points))
 }
 
@@ -418,8 +424,12 @@ pub fn load_points_cache_context_for(
 ) -> Option<(i64, Vec<serde_json::Value>, crate::track::wire::RunAreaMeta)> {
     let v: serde_json::Value = read_json("points_cache.json")?;
     let cache: PointsCache = serde_json::from_value(v).ok()?;
-    if cache.checkpoint_schema != 1 { return None; }
-    if !cache.anchor.is_near(anchor, 0.0001) { return None; }
+    if cache.checkpoint_schema != 1 {
+        return None;
+    }
+    if !cache.anchor.is_near(anchor, 0.0001) {
+        return None;
+    }
     let area = crate::track::wire::RunAreaMeta {
         run_area_id: cache.run_area_id,
         geo_fences_json: cache.geo_fences_json,
@@ -428,7 +438,11 @@ pub fn load_points_cache_context_for(
     Some((cache.ts, cache.points, area))
 }
 
-pub fn save_points_cache(anchor: crate::location::Coordinate, points: &[serde_json::Value]) -> Result<(), String> {
+#[allow(dead_code)]
+pub fn save_points_cache(
+    anchor: crate::location::Coordinate,
+    points: &[serde_json::Value],
+) -> Result<(), String> {
     save_points_cache_context(anchor, points, &crate::track::wire::RunAreaMeta::default())
 }
 
@@ -467,18 +481,38 @@ mod points_cache_tests {
         let _cleanup = Cleanup(directory);
         let anchor = crate::location::Coordinate::new(39.9, 116.4, 0.0).unwrap();
         let points = vec![serde_json::json!({"lat":39.9, "lon":116.4})];
-        write_json("points_cache.json", &serde_json::json!({"ts": 1, "anchor": anchor, "points": points})).unwrap();
+        write_json(
+            "points_cache.json",
+            &serde_json::json!({"ts": 1, "anchor": anchor, "points": points}),
+        )
+        .unwrap();
         assert!(load_points_cache_for(anchor).is_none());
-        save_points_cache_context(anchor, &points, &crate::track::wire::RunAreaMeta::default()).unwrap();
+        save_points_cache_context(anchor, &points, &crate::track::wire::RunAreaMeta::default())
+            .unwrap();
         assert_eq!(load_points_cache_for(anchor).unwrap().1, points);
     }
 
     #[test]
     fn cache_is_scoped_to_anchor() {
-        let cache = PointsCache { checkpoint_schema: 1, ts: 1, anchor: crate::location::Coordinate::new(39.9, 116.4, 0.0).unwrap(), points: vec![], run_area_id: -1, geo_fences_json: "[]".into(), freedom_show_fence: false };
-        let decoded: PointsCache = serde_json::from_value(serde_json::to_value(cache).unwrap()).unwrap();
-        assert!(decoded.anchor.is_near(crate::location::Coordinate::new(39.9, 116.4, 0.0).unwrap(), 0.0001));
-        assert!(!decoded.anchor.is_near(crate::location::Coordinate::new(38.9, 121.5, 0.0).unwrap(), 0.0001));
+        let cache = PointsCache {
+            checkpoint_schema: 1,
+            ts: 1,
+            anchor: crate::location::Coordinate::new(39.9, 116.4, 0.0).unwrap(),
+            points: vec![],
+            run_area_id: -1,
+            geo_fences_json: "[]".into(),
+            freedom_show_fence: false,
+        };
+        let decoded: PointsCache =
+            serde_json::from_value(serde_json::to_value(cache).unwrap()).unwrap();
+        assert!(decoded.anchor.is_near(
+            crate::location::Coordinate::new(39.9, 116.4, 0.0).unwrap(),
+            0.0001
+        ));
+        assert!(!decoded.anchor.is_near(
+            crate::location::Coordinate::new(38.9, 121.5, 0.0).unwrap(),
+            0.0001
+        ));
     }
 }
 

@@ -41,7 +41,10 @@ impl LogStore {
                 self.lines.pop_front();
             }
             let (kind, text) = classify(t);
-            self.lines.push_back(LogLine { text: text.to_string(), kind });
+            self.lines.push_back(LogLine {
+                text: text.to_string(),
+                kind,
+            });
         }
     }
 
@@ -60,7 +63,12 @@ impl LogStore {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for line in &self.lines {
-                    ui.label(RichText::new(&line.text).monospace().size(12.5).color(line.color()));
+                    ui.label(
+                        RichText::new(&line.text)
+                            .monospace()
+                            .size(12.5)
+                            .color(line.color()),
+                    );
                 }
             });
     }

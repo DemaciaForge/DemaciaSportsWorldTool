@@ -38,10 +38,14 @@ pub fn text() -> Color32 {
 
 /// 主操作按钮：深青绿底白字。
 pub fn primary_btn(text: &str) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text.to_owned()).color(Color32::WHITE).strong())
-        .fill(ACCENT)
-        .stroke(egui::Stroke::NONE)
-        .rounding(egui::Rounding::same(6.0))
+    egui::Button::new(
+        egui::RichText::new(text.to_owned())
+            .color(Color32::WHITE)
+            .strong(),
+    )
+    .fill(ACCENT)
+    .stroke(egui::Stroke::NONE)
+    .rounding(egui::Rounding::same(6.0))
 }
 
 pub fn apply(ctx: &egui::Context) {

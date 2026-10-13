@@ -30,15 +30,36 @@ pub fn query(client: &mut ApiClient, log: &mut dyn FnMut(&str)) -> Result<Semest
     let biz = client.call("POST", SUMMARY_PATH, "{}", &[])?;
     let data = super::client::parse_data_field(&biz);
     let mut summary = SemesterSummary {
-        sname: data.get("sname").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        semester_dis: data.get("semesterDis").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        semester_valid_dis: data.get("semesterValidDis").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        semester_count: data.get("semesterCount").and_then(|v| v.as_i64()).unwrap_or(0),
-        semester_valid_count: data.get("semesterValidCount").and_then(|v| v.as_i64()).unwrap_or(0),
+        sname: data
+            .get("sname")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        semester_dis: data
+            .get("semesterDis")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+        semester_valid_dis: data
+            .get("semesterValidDis")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+        semester_count: data
+            .get("semesterCount")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
+        semester_valid_count: data
+            .get("semesterValidCount")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0),
     };
 
     // 个人完成度：学期起止 / 考核方式 / 有效次数
-    let personal_raw = match client.call("POST", PERSONAL_PATH, &json!({ "runMode": 1 }).to_string(), &[]) {
+    let personal_raw = match client.call(
+        "POST",
+        PERSONAL_PATH,
+        &json!({ "runMode": 1 }).to_string(),
+        &[],
+    ) {
         Ok(biz) => super::client::parse_data_field(&biz),
         Err(e) => {
             log(&format!("[semester] 个人完成度接口失败（不影响汇总）: {e}"));
@@ -81,5 +102,8 @@ pub fn query(client: &mut ApiClient, log: &mut dyn FnMut(&str)) -> Result<Semest
         }
     }
 
-    Ok(SemesterResult { summary: Some(summary), personal_raw })
+    Ok(SemesterResult {
+        summary: Some(summary),
+        personal_raw,
+    })
 }

@@ -3,9 +3,9 @@
 //! recordssummary / personalSemesterCompleted(最近 rrid)。
 
 use super::{mobile, theme, App};
+use chrono::TimeZone;
 use eframe::egui;
 use egui::RichText;
-use chrono::TimeZone;
 use serde_json::Value;
 
 #[derive(Default)]
@@ -225,7 +225,9 @@ const PROFILE_KEYS: &[(&str, &str)] = &[
 fn profile_rows(profile: &Value) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (key, label) in PROFILE_KEYS {
-        let Some(val) = profile.get(key) else { continue };
+        let Some(val) = profile.get(key) else {
+            continue;
+        };
         let text = match val {
             Value::String(s) if !s.is_empty() => s.clone(),
             Value::Number(n) if n.as_f64() != Some(0.0) => n.to_string(),

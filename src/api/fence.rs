@@ -85,7 +85,8 @@ fn canonical_fences_json(fences: &[Value]) -> String {
                             output.insert(canonical.into(), value.clone());
                         }
                     }
-                    (output.contains_key("lat") && output.contains_key("lng")).then_some(Value::Object(output))
+                    (output.contains_key("lat") && output.contains_key("lng"))
+                        .then_some(Value::Object(output))
                 })
                 .collect();
             if points.len() < 3 {

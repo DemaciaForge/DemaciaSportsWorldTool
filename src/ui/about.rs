@@ -45,7 +45,8 @@ impl App {
             crate::update::REPO_UPSTREAM
         };
         ui.hyperlink_to(
-            egui::RichText::new(format!("https://github.com/{repo}/releases")).color(theme::text_dim()),
+            egui::RichText::new(format!("https://github.com/{repo}/releases"))
+                .color(theme::text_dim()),
             format!("https://github.com/{repo}/releases"),
         );
         ui.add_space(4.0);
@@ -62,7 +63,10 @@ impl App {
         // ── 检查 / 版本信息 ────────────────────────────────────
         ui.horizontal(|ui| {
             let busy = self.update.checking || self.update.downloading;
-            if ui.add_enabled(!busy, theme::primary_btn("检查更新")).clicked() {
+            if ui
+                .add_enabled(!busy, theme::primary_btn("检查更新"))
+                .clicked()
+            {
                 self.check_update(true);
             }
             if self.update.checking {
@@ -100,8 +104,8 @@ impl App {
             ui.add_space(6.0);
             if self.update.downloading {
                 self.draw_download_progress(ui);
-            } else if self.update.finish.is_none() {
-                if ui.button("立即更新").clicked() {
+            } else if self.update.finish.is_none()
+                && ui.button("立即更新").clicked() {
                     if self.any_busy() {
                         self.status = "有任务进行中，请稍后再试".into();
                     } else {
@@ -109,7 +113,6 @@ impl App {
                         self.update.confirm = Some(rel);
                     }
                 }
-            }
         }
         if self.update.downloading && self.update.latest.is_none() {
             self.draw_download_progress(ui);
@@ -132,9 +135,11 @@ impl App {
         // ── 启动检查模式 ───────────────────────────────────────
         ui.label("启动时检查更新：");
         ui.horizontal(|ui| {
-            for (m, label) in
-                [("silent", "静默检查（发现新版才提示）"), ("ask", "每次询问"), ("off", "关闭")]
-            {
+            for (m, label) in [
+                ("silent", "静默检查（发现新版才提示）"),
+                ("ask", "每次询问"),
+                ("off", "关闭"),
+            ] {
                 let selected = self.config.update_check == m;
                 if ui.radio(selected, label).clicked() {
                     self.config.update_check = m.to_string();
@@ -144,15 +149,11 @@ impl App {
                 }
             }
         });
-        ui.colored_label(
-            theme::text_dim(),
-            "协议变更时旧版本可能异常，建议保持开启",
-        );
+        ui.colored_label(theme::text_dim(), "协议变更时旧版本可能异常，建议保持开启");
     }
 
     fn draw_download_progress(&self, ui: &mut egui::Ui) {
-        let bar = egui::ProgressBar::new(self.update.fraction())
-            .text(self.update.progress_text());
+        let bar = egui::ProgressBar::new(self.update.fraction()).text(self.update.progress_text());
         ui.add(bar);
     }
 
@@ -253,7 +254,8 @@ impl App {
                 ),
                 FinishAction::InstallApk { tag } => (
                     format!("已下载 {tag}"),
-                    "点击安装，在系统弹窗中确认；若提示禁止安装，请允许本应用安装未知应用。".to_string(),
+                    "点击安装，在系统弹窗中确认；若提示禁止安装，请允许本应用安装未知应用。"
+                        .to_string(),
                     "安装".to_string(),
                 ),
             };
@@ -277,20 +279,18 @@ impl App {
                 });
             if done {
                 match self.update.finish.take() {
-                    Some(FinishAction::Restart { .. }) => {
-                        match crate::relaunch::relaunch_self() {
-                            Ok(()) => {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            }
-                            Err(e) => {
-                                self.status = e.clone();
-                                self.popup = Some(super::PopupInfo {
-                                    title: "更新完成".into(),
-                                    lines: vec![e],
-                                });
-                            }
+                    Some(FinishAction::Restart { .. }) => match crate::relaunch::relaunch_self() {
+                        Ok(()) => {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
-                    }
+                        Err(e) => {
+                            self.status = e.clone();
+                            self.popup = Some(super::PopupInfo {
+                                title: "更新完成".into(),
+                                lines: vec![e],
+                            });
+                        }
+                    },
                     Some(FinishAction::InstallApk { .. }) => {
                         crate::platform::install_apk(
                             &crate::platform::data_dir()

@@ -34,7 +34,11 @@ impl CheatReport {
     }
 }
 
-pub fn query(client: &mut ApiClient, page: i64, log: &mut dyn FnMut(&str)) -> Result<CheatReport, String> {
+pub fn query(
+    client: &mut ApiClient,
+    page: i64,
+    log: &mut dyn FnMut(&str),
+) -> Result<CheatReport, String> {
     let unid: i64 = client
         .login
         .as_ref()
@@ -51,7 +55,11 @@ pub fn query(client: &mut ApiClient, page: i64, log: &mut dyn FnMut(&str)) -> Re
     let self_info = data.get("self").cloned().unwrap_or(Value::Null);
     log(&format!(
         "[cheat] self={} 全校违规 {} 条",
-        if self_info.is_null() { "null" } else { "非空" },
+        if self_info.is_null() {
+            "null"
+        } else {
+            "非空"
+        },
         list.len()
     ));
     Ok(CheatReport { self_info, list })

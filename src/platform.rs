@@ -35,9 +35,14 @@ pub fn edit_text(id: u64, value: &str, kind: InputKind) {
 
 pub fn take_edited_text(id: u64) -> Option<String> {
     #[cfg(target_os = "android")]
-    { crate::android::take_edited_text(id) }
+    {
+        crate::android::take_edited_text(id)
+    }
     #[cfg(not(target_os = "android"))]
-    { let _ = id; None }
+    {
+        let _ = id;
+        None
+    }
 }
 
 pub fn set_keep_screen_on(enabled: bool) {
@@ -51,9 +56,13 @@ pub fn set_keep_screen_on(enabled: bool) {
 /// （形如 0.2.5-android.3，与 Release tag 对齐）。
 pub fn version_name() -> String {
     #[cfg(target_os = "android")]
-    { crate::android::version_name() }
+    {
+        crate::android::version_name()
+    }
     #[cfg(not(target_os = "android"))]
-    { env!("CARGO_PKG_VERSION").to_string() }
+    {
+        env!("CARGO_PKG_VERSION").to_string()
+    }
 }
 
 /// Android：把已下载的 APK 交给系统安装器（用户在系统弹窗确认安装）。
@@ -69,7 +78,9 @@ pub fn sync_clipboard(context: &egui::Context) {
     #[cfg(target_os = "android")]
     {
         let text = context.output(|output| output.copied_text.clone());
-        if !text.is_empty() { crate::android::copy_text(&text); }
+        if !text.is_empty() {
+            crate::android::copy_text(&text);
+        }
     }
     #[cfg(not(target_os = "android"))]
     let _ = context;
