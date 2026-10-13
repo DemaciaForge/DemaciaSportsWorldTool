@@ -12,7 +12,7 @@
 
 ## 功能
 
-- **跑步**：一键全链（策略 → 打卡点 → 轨迹 → 提交 → OBS → 验证），轨迹按打卡点自然生成，开始时间支持随机或指定到前 3 天
+- **跑步**：一键全链（策略 → 打卡点 → 轨迹 → 提交 → OBS → 验证），轨迹按打卡点自然生成，开始时间支持随机或指定到前 3 天；路线颜色可选全绿色或灰绿混合
 - **AI 运动**：任务 / 自由练习双模式，批量补签（前 60 天 × 多项目）
 - **数据**：学期完成度、违规自查、排行榜（个人/班级/院系 × 日/月、室内榜、历史榜）、个人主页
 - **登录**：支持人机验证自动通过
@@ -37,6 +37,9 @@
 ```text
 NekoSportsWorldTool login --user <手机号> --pass <密码> --remember
 NekoSportsWorldTool run                                  # 一键跑步（--altitude 17.2 固定海拔，或 11.6-22.8 映射到区间）
+NekoSportsWorldTool run --dry-run --dist 2 --pace 360 --lat 39.9 --lon 116.4
+                                                         # 本地生成并校验轨迹/五点/OBS，不登录、不联网、不上传
+NekoSportsWorldTool run --track-color full-green         # 全绿色（默认）；也可选 half-green-gray
 NekoSportsWorldTool ai --sport 2 --score 26000           # AI 运动
 NekoSportsWorldTool rank main --type 1 --sort 1          # 排行榜
 NekoSportsWorldTool update [--check]           # 自动更新（--check 仅检查不下载）
@@ -46,6 +49,9 @@ NekoSportsWorldTool help                                 # 全部命令
 
 `template` 只读取用户手动选择的本地 GPX/JSON 文件，输出采样点、海拔范围、累计上升和累计下降，
 不会登录、访问服务器或把模板记录接入跑步上传流程。
+
+`run --dry-run` 使用本地经典轨迹生成器构造一条完整样本，校验坐标一致性、五点包装、OBS 字段和速度窗口；
+它不会创建登录客户端，也不会发起网络请求。`--lat` 与 `--lon` 可显式指定本地校验锚点，省略时使用已保存的设备锚点。
 
 手动海拔支持三种状态：留空使用自动海拔；填写单个数字（例如 `17.2`）让所有轨迹点使用固定海拔；填写区间（例如 `11.6-22.8`）将生成的海拔曲线映射到该上下限内，同时保留轨迹的相对起伏。
 
@@ -67,6 +73,12 @@ NekoSportsWorldTool help                                 # 全部命令
 ```bash
 cargo build --release                        # GUI + CLI
 cargo build --release --no-default-features  # 仅 CLI
+```
+
+测试还包含脱敏日志、`data` 字符串/对象兼容解析，以及策略、排行榜和记录响应 fixture：
+
+```bash
+cargo test --all
 ```
 
 推 tag 自动构建 Windows / macOS / Linux 四平台产物并发布 Release（见 `.github/workflows/release.yml`）。

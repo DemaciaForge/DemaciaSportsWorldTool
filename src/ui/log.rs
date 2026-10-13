@@ -2,7 +2,7 @@
 //! 入站行的 √/×/⚠ 前缀仅用于着色，落盘展示时剥离。
 
 use super::theme;
-use crate::textlog::{classify, LogKind};
+use crate::textlog::{classify, redact_text, LogKind};
 use egui::{Color32, RichText, ScrollArea};
 use std::collections::VecDeque;
 
@@ -42,7 +42,7 @@ impl LogStore {
             }
             let (kind, text) = classify(t);
             self.lines.push_back(LogLine {
-                text: text.to_string(),
+                text: redact_text(text),
                 kind,
             });
         }

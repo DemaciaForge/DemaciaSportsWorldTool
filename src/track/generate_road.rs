@@ -8,13 +8,16 @@
 //!
 //! 协议字段/哨兵/断崖/吸附/10s 窗与经典模式完全一致。
 
-use super::generator::{SPEED_CEIL, SPEED_FLOOR};
+use super::generator::{
+    MAX_EXCEPTION_DRIFT_M, MAX_EXCEPTION_GPS_SPEED_KMH, SPEED_CEIL, SPEED_FLOOR,
+};
 use super::geom::{
     fmt_gain_time, ring_point_at, round_to, to_bd, wgs84_to_bd09, Rng, MET_PER_DEG_LAT,
     MET_PER_DEG_LNG,
 };
 use super::model::{GenPoint, Segment, TenWindow, Track};
 use super::postfix::apply_post_fixes;
+use crate::api::model::TrackColorMode;
 use route_planner::{
     fatigue_from_km, gait, ou_cadence_series, pace_profile, plan_route_split, point_in_polygon,
     Coord, GpsJitter, KinParams, RoadGraph, Route, RouteOptions, Sdf,
@@ -93,21 +96,26 @@ fn edge_inside(polys: &[Vec<Coord>], a: Coord, b: Coord) -> bool {
 
 /// 生成路网预览（对齐 + 围栏裁剪 + 闭环路由），不产生协议字段。
 ///
-/// 预览阶段拿不到 policy 必经点，故仅做「软引导 + 吸附」，不强制经过任何打卡点。
+/// 硬点与真实提交一致：必经点（`fixed`）+ 随机 `pick` 个普通点（`ordinary`），
+/// 全部强经过；随机性由 `seed` 决定，与实际运行同 seed 时选择一致。
+/// `pick` 为随机抽取的普通点数量（运行时可变，别写死）。
 pub fn plan_road_view(
     net: &RoadGraph,
-    points_bd: &[(f64, f64)],
+    fixed: &[(f64, f64)],
+    ordinary: &[(f64, f64)],
     dist: f64,
     seed: u64,
     fences: &[Vec<(f64, f64)>],
+    pick: usize,
 ) -> Result<RoadPlan, String> {
     let mut g = net.clone();
     align_network(&mut g);
     g = apply_fences(&g, fences);
-    let ordered = radial_order(points_bd);
+    let ordered = select_route_points(fixed, ordinary, seed, pick);
     let waypoints: Vec<Coord> = ordered.iter().map(|p| Coord::new(p.1, p.0)).collect();
+    let must_pass: Vec<Coord> = waypoints.iter().skip(1).copied().collect();
     let opts = RouteOptions::default();
-    let route = plan_route_split(&g, &waypoints, &[], dist, seed, &opts)?;
+    let route = plan_route_split(&g, &waypoints, &must_pass, dist, seed, &opts)?;
     let route_pts: Vec<(f64, f64)> = route.points.iter().map(|p| (p.lat, p.lon)).collect();
     let edges: Vec<Vec<(f64, f64)>> = g
         .edges_deg()
@@ -152,6 +160,35 @@ pub fn align_network(net: &mut RoadGraph) {
     }
     net.compute_anchor();
     net.rebuild_index();
+}
+
+/// 真实道路模式随机选中的普通打卡点数量的默认值（运行时可变，别写死）。
+pub const DEFAULT_ORDINARY_PICK: usize = 2;
+
+/// 从点位挑选参与路线的硬点：必经点（`fixed`，全部）+ 随机 `pick` 个普通点
+/// （`ordinary`）。结果按质心角排序成自然环序（`radial_order`），首个即起点。
+/// 随机性由 `seed` 决定，保证预览与实际运行可复现且一致。
+pub fn select_route_points(
+    fixed: &[(f64, f64)],
+    ordinary: &[(f64, f64)],
+    seed: u64,
+    pick: usize,
+) -> Vec<(f64, f64)> {
+    use rand::seq::SliceRandom;
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed ^ 0x5EED_C0FF_EE00_1234);
+    let mut pool = ordinary.to_vec();
+    pool.shuffle(&mut rng);
+    let near = |a: &(f64, f64), b: &(f64, f64)| {
+        (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6
+    };
+    let mut selected: Vec<(f64, f64)> = fixed.to_vec();
+    for p in pool.into_iter().take(pick) {
+        if !selected.iter().any(|q| near(q, &p)) {
+            selected.push(p);
+        }
+    }
+    radial_order(&selected)
 }
 
 /// 按质心角度排序打卡点，形成自然环序。
@@ -205,6 +242,28 @@ pub fn build_road(
     route_bd: &[(f64, f64)],
     must_bd: &[(f64, f64)],
     net: &RoadGraph,
+) -> Result<Track, String> {
+    build_road_with_color_mode(
+        dist,
+        dur,
+        seed,
+        start_ms,
+        route_bd,
+        must_bd,
+        net,
+        TrackColorMode::FullGreen,
+    )
+}
+
+pub fn build_road_with_color_mode(
+    dist: f64,
+    dur: i64,
+    seed: u64,
+    start_ms: i64,
+    route_bd: &[(f64, f64)],
+    must_bd: &[(f64, f64)],
+    net: &RoadGraph,
+    color_mode: TrackColorMode,
 ) -> Result<Track, String> {
     let mut rng = Rng::new(seed);
     let dur_f = dur as f64;
@@ -263,37 +322,45 @@ pub fn build_road(
     let seg_dist: Vec<f64> = (0..n).map(|i| w[i] * dts[i]).collect();
 
     // 点位类型（同经典模式）
-    let tl_w = [
-        ((-1i64, 4i64), 54u32),
-        ((-1, 1), 27),
-        ((-1, 12), 13),
-        ((-1, 5), 3),
-        ((-1, 6), 2),
-    ];
-    let mut kinds: Vec<(i64, i64)> = Vec::with_capacity(n);
-    for _ in 0..n {
-        let u = rng.random();
-        if u < 0.39 {
-            kinds.push((3, 1));
-        } else if u < 0.93 {
-            kinds.push((0, 1));
-        } else if u < 0.96 {
-            kinds.push(rng.weighted(&tl_w));
-        } else {
-            kinds.push((rng.choice(&[1, 1, 1, 1, 2, 2]), 1));
+    let kinds: Vec<(i64, i64)> = match color_mode {
+        TrackColorMode::FullGreen => vec![(0, 1); n],
+        TrackColorMode::HalfGreenGray => {
+            let tl_w = [
+                ((-1i64, 4i64), 54u32),
+                ((-1, 1), 27),
+                ((-1, 12), 13),
+                ((-1, 5), 3),
+                ((-1, 6), 2),
+            ];
+            let mut kinds: Vec<(i64, i64)> = Vec::with_capacity(n);
+            for _ in 0..n {
+                let u = rng.random();
+                if u < 0.39 {
+                    kinds.push((3, 1));
+                } else if u < 0.93 {
+                    kinds.push((0, 1));
+                } else if u < 0.96 {
+                    kinds.push(rng.weighted(&tl_w));
+                } else {
+                    kinds.push((rng.choice(&[1, 1, 1, 1, 2, 2]), 1));
+                }
+            }
+            for i in 1..kinds.len() {
+                let prev_drift = (-1 == kinds[i - 1].0)
+                    || kinds[i - 1].0 == 5
+                    || kinds[i - 1].0 == 6;
+                if kinds[i].0 != -1 && prev_drift && rng.random() < 0.08 {
+                    kinds[i] = (if rng.random() < 0.75 { 7 } else { 8 }, 1);
+                }
+            }
+            for i in 1..n {
+                if kinds[i].0 == -1 && kinds[i - 1].0 == -1 {
+                    kinds[i] = (rng.choice(&[3, 0]), 1);
+                }
+            }
+            kinds
         }
-    }
-    for i in 1..kinds.len() {
-        let prev_drift = (-1 == kinds[i - 1].0) || kinds[i - 1].0 == 5 || kinds[i - 1].0 == 6;
-        if kinds[i].0 != -1 && prev_drift && rng.random() < 0.08 {
-            kinds[i] = (if rng.random() < 0.75 { 7 } else { 8 }, 1);
-        }
-    }
-    for i in 1..n {
-        if kinds[i].0 == -1 && kinds[i - 1].0 == -1 {
-            kinds[i] = (rng.choice(&[3, 0]), 1);
-        }
-    }
+    };
     let normal_idx: Vec<usize> = (0..n).filter(|&i| kinds[i].0 != -1 && i > 1).collect();
     let share: f64 = normal_idx.iter().map(|&i| seg_dist[i]).sum();
     let share = if share == 0.0 { 1.0 } else { share };
@@ -361,14 +428,18 @@ pub fn build_road(
             x = bx;
             y = by;
             // AR(1) 相关漂移 + 高斯测量噪声，SDF 自适应放大
-            let sc = sdf.sigma_scale([bx, by]);
-            let z = [
-                rng.gauss(0.0, 1.0),
-                rng.gauss(0.0, 1.0),
-                rng.gauss(0.0, 1.0),
-                rng.gauss(0.0, 1.0),
-            ];
-            let (jxd, jyd) = jitter.step(sc, z);
+            let (jxd, jyd) = if color_mode == TrackColorMode::FullGreen {
+                (0.0, 0.0)
+            } else {
+                let sc = sdf.sigma_scale([bx, by]);
+                let z = [
+                    rng.gauss(0.0, 1.0),
+                    rng.gauss(0.0, 1.0),
+                    rng.gauss(0.0, 1.0),
+                    rng.gauss(0.0, 1.0),
+                ];
+                jitter.step(sc, z)
+            };
             px = bx + jxd;
             py = by + jyd;
             rad = round_to(
@@ -379,36 +450,16 @@ pub fn build_road(
                 },
                 2,
             );
-            state = if typ == 0 {
+            state = if color_mode == TrackColorMode::FullGreen {
+                1
+            } else if typ == 0 {
                 rng.weighted(&[(1, 145), (2, 45), (3, 164)])
             } else {
                 rng.weighted(&[(1, 145), (2, 256), (3, 151)])
             };
         } else {
-            match lt {
-                4 => {
-                    if rng.random() >= 0.68 {
-                        d_step = if rng.random() < 0.95 {
-                            rng.uniform(2.0, 60.0)
-                        } else {
-                            rng.uniform(60.0, 250.0)
-                        };
-                    }
-                }
-                1 => {
-                    if rng.random() >= 0.83 {
-                        d_step = rng.uniform(0.5, 36.0);
-                    }
-                }
-                12 => {
-                    d_step = if rng.random() < 0.9 {
-                        rng.uniform(5.0, 80.0)
-                    } else {
-                        rng.uniform(80.0, 220.0)
-                    };
-                }
-                5 => d_step = rng.uniform(5.0, 60.0),
-                _ => d_step = rng.uniform(100.0, 300.0),
+            if rng.random() >= 0.20 {
+                d_step = rng.uniform(0.0, MAX_EXCEPTION_DRIFT_M);
             }
             let (bx, by) = pos(s);
             x = bx;
@@ -425,7 +476,9 @@ pub fn build_road(
                 px = x + jx;
                 py = y + jy;
             }
-            rad = if lt == 4 {
+            rad = if typ == -1 {
+                round_to(rng.uniform(3.0, 10.0), 2)
+            } else if lt == 4 {
                 round_to(
                     if rng.random() < 0.75 {
                         rng.uniform(30.0, 100.0)
@@ -468,11 +521,7 @@ pub fn build_road(
             ((nxt.0 - x).atan2(nxt.1 - y).to_degrees() + rng.gauss(0.0, 35.0)).rem_euclid(360.0);
         let (avg_sp, gps_speed) = if typ == -1 {
             let avg = round_to(dist_acc / t_acc.max(1.0), 4);
-            let gps = if rng.random() < 0.12 {
-                rng.uniform(15.0, 46.0)
-            } else {
-                rng.uniform(0.5, 6.0)
-            };
+            let gps = rng.uniform(0.5, MAX_EXCEPTION_GPS_SPEED_KMH);
             (avg, round_to(gps, 4))
         } else {
             let avg = round_to(d_step / dt, 4);
@@ -531,7 +580,11 @@ pub fn build_road(
             bdA: round_to(alt, 2),
             bdD: round_to(brg, 2),
             bdS: round_to((avg_sp * rng.uniform(0.6, 0.95)).max(0.0), 3),
-            bdG: rng.choice(&[1, 1, 1, -1]),
+            bdG: if color_mode == TrackColorMode::FullGreen {
+                1
+            } else {
+                rng.choice(&[1, 1, 1, -1])
+            },
             count: rng.randint(20, 88),
             dtr: 0.0,
             state,
@@ -574,6 +627,22 @@ pub fn build_road(
     }
 
     apply_post_fixes(&mut locs, &mut rng, start_ms);
+
+    if color_mode == TrackColorMode::FullGreen {
+        let last_index = locs.len().saturating_sub(1);
+        for (i, point) in locs.iter_mut().enumerate() {
+            point.ptype = if i == 1 {
+                5
+            } else if i == last_index {
+                6
+            } else {
+                0
+            };
+            point.locType = 1;
+            point.state = 1;
+            point.bdG = 1;
+        }
+    }
 
     // 点位吸附：<40m 精确落位（全量打卡点，含必经点与普通打卡点）
     for pl in route_bd {

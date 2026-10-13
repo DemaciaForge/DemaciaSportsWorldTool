@@ -138,3 +138,32 @@ fn dump_unknown(biz: &Value, name: &str) {
         let _ = std::fs::write(&path, biz.to_string());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_data, rows_from};
+
+    #[test]
+    fn parses_wrapped_string_rank_fixture_and_field_aliases() {
+        let raw = include_str!("fixtures/rank_wrapped_string.json");
+        let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let rows = rows_from(parse_data(&value));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].sort, 2);
+        assert_eq!(rows[0].name, "小明");
+        assert_eq!(rows[0].length, 3210.5);
+        assert_eq!(rows[1].sort, 3);
+        assert_eq!(rows[1].name, "小红");
+        assert_eq!(rows[1].length, 2876.0);
+    }
+
+    #[test]
+    fn malformed_rank_rows_are_dropped_without_panicking() {
+        let value = serde_json::json!({
+            "data": [{"rank": 1, "userName": "valid", "totalDis": 1000}, {"rank": 2}]
+        });
+        let rows = rows_from(parse_data(&value));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "valid");
+    }
+}

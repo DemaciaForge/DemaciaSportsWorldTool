@@ -7,13 +7,16 @@ pub mod generator;
 pub mod geom;
 pub mod model;
 pub mod postfix;
+pub mod stadium;
 pub mod wire;
 
 #[cfg(test)]
 mod tests {
-    use super::generate_road::build_road;
+    use super::generate_road::{build_road, select_route_points, DEFAULT_ORDINARY_PICK};
     use super::generator::build;
+    use super::generator::build_with_color_mode;
     use super::geom::{MET_PER_DEG_LAT, MET_PER_DEG_LNG};
+    use crate::api::model::TrackColorMode;
 
     use super::wire::*;
 
@@ -79,6 +82,77 @@ mod tests {
         g
     }
 
+    fn assert_exception_points_are_bounded(track: &super::model::Track) {
+        let mut exception_count = 0;
+        for (index, point) in track.locations.iter().enumerate() {
+            if point.ptype != -1 {
+                continue;
+            }
+            exception_count += 1;
+            assert!(point.radius <= 10.0, "exception radius={}", point.radius);
+            assert!(point.speed <= super::generator::MAX_EXCEPTION_GPS_SPEED_KMH + 1e-9);
+            for neighbor in [
+                index.checked_sub(1),
+                (index + 1 < track.locations.len()).then_some(index + 1),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let other = &track.locations[neighbor];
+                let dx = (point.gLng - other.gLng) * MET_PER_DEG_LNG;
+                let dy = (point.gLat - other.gLat) * MET_PER_DEG_LAT;
+                assert!(
+                    (dx * dx + dy * dy).sqrt() <= 45.0,
+                    "exception neighbor jump too large"
+                );
+            }
+        }
+        assert!(exception_count > 0, "test track should exercise exception points");
+    }
+
+    /// 选点：必经点全选 + 普通点恰好取 pick 个，seed 可复现，不足则全取。
+    #[test]
+    fn test_select_route_points() {
+        let fixed = vec![(1.0, 1.0)];
+        let ordinary = vec![(2.0, 2.0), (3.0, 3.0), (4.0, 4.0), (5.0, 5.0)];
+        let sel = select_route_points(&fixed, &ordinary, 42, DEFAULT_ORDINARY_PICK);
+        assert_eq!(sel.len(), 1 + DEFAULT_ORDINARY_PICK, "sel={sel:?}");
+        assert!(sel.contains(&(1.0, 1.0)), "必经点必须入选");
+        // 同 seed 可复现
+        assert_eq!(
+            sel,
+            select_route_points(&fixed, &ordinary, 42, DEFAULT_ORDINARY_PICK)
+        );
+        // pick 可变：取 3 个普通点
+        assert_eq!(
+            select_route_points(&fixed, &ordinary, 42, 3).len(),
+            4,
+            "pick=3 应含必经 + 3 普通"
+        );
+        // 普通点不足：有几个取几个
+        let few = select_route_points(&fixed, &[(9.0, 9.0)], 1, DEFAULT_ORDINARY_PICK);
+        assert_eq!(few.len(), 2);
+        // fixed 与 ordinary 重叠时去重，不重复
+        let overlap =
+            select_route_points(&[(1.0, 1.0)], &[(1.0, 1.0), (2.0, 2.0)], 7, DEFAULT_ORDINARY_PICK);
+        assert_eq!(overlap.len(), 2);
+    }
+
+    /// 点位数分类：isFixed 字段决定必经/普通。
+    #[test]
+    fn test_points_fixed_free_split() {
+        let pts = vec![
+            serde_json::json!({"lat": 1.0, "lon": 1.0, "isFixed": 1}),
+            serde_json::json!({"lat": 2.0, "lon": 2.0, "isFixed": 0}),
+            serde_json::json!({"lat": 3.0, "lon": 3.0}),
+        ];
+        assert_eq!(crate::api::points::points_fixed(&pts), vec![(1.0, 1.0)]);
+        assert_eq!(
+            crate::api::points::points_free(&pts),
+            vec![(2.0, 2.0), (3.0, 3.0)]
+        );
+    }
+
     /// 模式 B（真实道路路由）：距离精确、哨兵/断崖语义与模式 A 一致。
     #[test]
     fn test_build_road_distribution() {
@@ -98,6 +172,10 @@ mod tests {
         assert_eq!(track.locations.last().unwrap().ptype, 6);
         // 步数为正
         assert!(track.totalSteps > 500, "steps={}", track.totalSteps);
+        assert!(
+            track.locations.iter().all(|point| point.ptype != -1),
+            "full-green road mode must not emit invalid drift points"
+        );
     }
 
     /// 轨迹生成抽样断言：距离精确、采样间隔分布、哨兵/断崖/位移语义。
@@ -161,6 +239,43 @@ mod tests {
         assert_eq!(track.locations[0].coorType, "gcj02");
         // 步数为正、步频在合理范围
         assert!(track.totalSteps > 500, "steps={}", track.totalSteps);
+    }
+
+    #[test]
+    fn full_green_mode_uses_only_green_track_points() {
+        let track = build_with_color_mode(
+            3300.0,
+            1220,
+            42,
+            (38.9, 121.54),
+            1_788_958_186_123,
+            &sample_points(),
+            TrackColorMode::FullGreen,
+        );
+        let last = track.locations.len() - 1;
+        for (i, point) in track.locations.iter().enumerate() {
+            let expected_type = if i == 1 { 5 } else if i == last { 6 } else { 0 };
+            assert_eq!(point.ptype, expected_type);
+            assert_eq!(point.locType, 1);
+            assert_eq!(point.state, 1);
+            assert_eq!(point.bdG, 1);
+        }
+    }
+
+    #[test]
+    fn mixed_mode_preserves_legacy_color_variation() {
+        let track = build_with_color_mode(
+            3300.0,
+            1220,
+            42,
+            (38.9, 121.54),
+            1_788_958_186_123,
+            &sample_points(),
+            TrackColorMode::HalfGreenGray,
+        );
+        assert!(track.locations.iter().any(|point| {
+            !matches!(point.ptype, 0 | 5 | 6) || point.state != 1 || point.bdG != 1
+        }));
     }
 
     /// 打卡点吸附：轨迹必过点位（<40m 落位）。

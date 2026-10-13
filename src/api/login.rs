@@ -186,8 +186,11 @@ pub fn login(
         eprintln!("[login] 会话保存失败: {e}");
     }
     eprintln!(
-        "[session] uid={} token={} unid={} name={} weight={} device={}",
-        sess.uid, sess.token, sess.unid, sess.name, sess.weight, sess.device_id
+        "{}",
+        crate::textlog::redact_text(&format!(
+            "[session] uid={} token={} unid={} name={} weight={} deviceId={}",
+            sess.uid, sess.token, sess.unid, sess.name, sess.weight, sess.device_id
+        ))
     );
     eprintln!(
         "[session] profile 字段数={}",

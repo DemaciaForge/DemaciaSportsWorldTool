@@ -97,7 +97,10 @@ impl ApiClient {
             Ok(d) => (Some(d), String::new()),
             Err(e) => (
                 None,
-                format!("{e} | 原文: {}", crate::textlog::truncate(&raw, 160)),
+                crate::textlog::redact_text(&format!(
+                    "{e} | 原文: {}",
+                    crate::textlog::truncate(&raw, 160)
+                )),
             ),
         };
         Ok(RequestOutcome {
@@ -146,14 +149,21 @@ impl ApiClient {
         let business = match check_business(&dec.business) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("[resp] {} -> Err: {}", path, e);
+                eprintln!(
+                    "[resp] {} -> Err: {}",
+                    path,
+                    crate::textlog::redact_text(&e)
+                );
                 return Err(e);
             }
         };
         let biz_str = serde_json::to_string(&business).unwrap_or_default();
         eprintln!(
             "[resp] {} -> {} ({}B) {}",
-            path, out.http_status, out.raw_len, biz_str
+            path,
+            out.http_status,
+            out.raw_len,
+            crate::textlog::redact_text(&biz_str)
         );
         Ok(business)
     }
@@ -170,7 +180,9 @@ pub fn check_business(v: &serde_json::Value) -> Result<serde_json::Value, String
             .or_else(|| v.get("msg"))
             .and_then(|m| m.as_str())
             .unwrap_or("(无消息)");
-        Err(format!("业务错误 {err}: {msg}"))
+        Err(crate::textlog::redact_text(&format!(
+            "业务错误 {err}: {msg}"
+        )))
     }
 }
 
@@ -199,8 +211,38 @@ pub fn ureq_err(e: ureq::Error) -> String {
     match e {
         ureq::Error::Status(code, resp) => {
             let body = resp.into_string().unwrap_or_default();
-            format!("HTTP {code}: {}", &body[..body.len().min(300)])
+            format!("HTTP {code}: {}", crate::textlog::redact_text(&crate::textlog::truncate(&body, 300)))
         }
         ureq::Error::Transport(t) => format!("网络错误: {t}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_business, parse_data_field};
+
+    #[test]
+    fn parse_data_field_accepts_object_array_and_json_string() {
+        let object = serde_json::json!({"data": {"ok": true}});
+        assert_eq!(parse_data_field(&object)["ok"].as_bool(), Some(true));
+
+        let array = serde_json::json!({"data": [1, 2, 3]});
+        assert_eq!(parse_data_field(&array).as_array().unwrap().len(), 3);
+
+        let wrapped = serde_json::json!({"data": "{\"records\":[{\"rrid\":7}]}"});
+        assert_eq!(
+            parse_data_field(&wrapped)["records"][0]["rrid"].as_i64(),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn business_errors_are_rejected_and_success_is_preserved() {
+        let ok = serde_json::json!({"error": 10000, "data": {"ok": true}});
+        assert!(check_business(&ok).is_ok());
+        let bad = serde_json::json!({"error": 401, "message": "token=secret"});
+        let error = check_business(&bad).unwrap_err();
+        assert!(error.contains("token=***"));
+        assert!(!error.contains("secret"));
     }
 }

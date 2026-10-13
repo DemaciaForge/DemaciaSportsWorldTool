@@ -6,16 +6,22 @@
 //! 哨兵点（首 type∈{0,7}、索引1 type=5、末 type=6）；结尾断崖；点位吸附。
 #![allow(non_snake_case)]
 
-use super::geom::{
-    fmt_gain_time, make_point_ring, ring_point_at, round_to, to_bd, Rng, MET_PER_DEG_LAT,
-    MET_PER_DEG_LNG,
-};
+use super::geom::{fmt_gain_time, make_point_ring, ring_point_at, round_to, to_bd, Rng, MET_PER_DEG_LAT, MET_PER_DEG_LNG};
+use super::geom::PointRing;
 use super::model::{GenPoint, Segment, TenWindow, Track};
 use super::postfix::apply_post_fixes;
+use super::stadium::{make_stadium_ring, TrackSpec};
+use crate::api::model::TrackColorMode;
 
 /// 有效配速窗口（判定规则 2'21"-10'00"/km ≈ 1.667-7.092 m/s），硬边界留余量。
 pub const SPEED_FLOOR: f64 = 1.90;
 pub const SPEED_CEIL: f64 = 6.30;
+pub const MAX_EXCEPTION_GPS_SPEED_KMH: f64 = 6.0;
+/// Maximum coordinate drift for a protocol exception point.
+///
+/// These points may still carry their original type marker, but they must not
+/// create a map-scale jump that the server interprets as an invalid route.
+pub const MAX_EXCEPTION_DRIFT_M: f64 = 6.0;
 
 /// 等比缩放逐点速度至目标总距：越界点钳在窗口边界，剩余差量由未饱和点分摊（迭代收敛）。
 /// 与整体等比缩放的区别：任何一点的瞬时配速都不会越出有效窗口。
@@ -44,9 +50,75 @@ pub fn build(
     start_ms: i64,
     points_bd: &[(f64, f64)],
 ) -> Track {
+    build_with_color_mode(
+        dist,
+        dur,
+        seed,
+        _center,
+        start_ms,
+        points_bd,
+        TrackColorMode::FullGreen,
+    )
+}
+
+/// Generate a route along a selected standard athletics track.
+pub fn build_stadium(
+    dist: f64,
+    dur: i64,
+    seed: u64,
+    center: (f64, f64),
+    start_ms: i64,
+    points_bd: &[(f64, f64)],
+    spec: TrackSpec,
+) -> Result<Track, String> {
+    let ring = make_stadium_ring(points_bd, spec)?;
+    Ok(build_on_ring(
+        dist,
+        dur,
+        seed,
+        center,
+        start_ms,
+        points_bd,
+        Some(ring),
+        TrackColorMode::FullGreen,
+    ))
+}
+
+/// 生成轨迹并选择详情页路线颜色模式。
+pub fn build_with_color_mode(
+    dist: f64,
+    dur: i64,
+    seed: u64,
+    _center: (f64, f64),
+    start_ms: i64,
+    points_bd: &[(f64, f64)],
+    color_mode: TrackColorMode,
+) -> Track {
+    build_on_ring(
+        dist,
+        dur,
+        seed,
+        _center,
+        start_ms,
+        points_bd,
+        None,
+        color_mode,
+    )
+}
+
+fn build_on_ring(
+    dist: f64,
+    dur: i64,
+    seed: u64,
+    _center: (f64, f64),
+    start_ms: i64,
+    points_bd: &[(f64, f64)],
+    supplied_ring: Option<PointRing>,
+    color_mode: TrackColorMode,
+) -> Track {
     let mut rng = Rng::new(seed);
     let dur_f = dur as f64;
-    let (dense, arcs, pc) = make_point_ring(points_bd);
+    let (dense, arcs, pc) = supplied_ring.unwrap_or_else(|| make_point_ring(points_bd));
     let (c_lat, c_lng) = pc;
     let direction: f64 = rng.choice(&[1.0, -1.0]);
     let s0 = rng.uniform(0.0, *arcs.last().unwrap_or(&400.0));
@@ -116,34 +188,39 @@ pub fn build(
     let seg_dist: Vec<f64> = (0..n).map(|i| w[i] * dts[i]).collect();
     let speeds: Vec<f64> = w.clone();
 
-    let mut kinds: Vec<(i64, i64)> = Vec::with_capacity(n);
-    for _ in 0..n {
-        let u = rng.random();
-        if u < 0.39 {
-            kinds.push((3, 1));
-        } else if u < 0.93 {
-            kinds.push((0, 1));
-        } else if u < 0.96 {
-            // Invalid (-1) drift points make the server render gray segments
-            // and are not appropriate for a campus run that must stay inside
-            // the returned green area fence.
-            kinds.push(rng.choice(&[(3, 1), (0, 1), (1, 1), (2, 1)]));
-        } else {
-            kinds.push((rng.choice(&[1, 1, 1, 1, 2, 2]), 1));
+    let kinds: Vec<(i64, i64)> = match color_mode {
+        TrackColorMode::FullGreen => vec![(0, 1); n],
+        TrackColorMode::HalfGreenGray => {
+            let tl_w = [((-1i64, 4i64), 54u32), ((-1, 1), 27), ((-1, 12), 13), ((-1, 5), 3), ((-1, 6), 2)];
+            let mut kinds: Vec<(i64, i64)> = Vec::with_capacity(n);
+            for _ in 0..n {
+                let u = rng.random();
+                if u < 0.39 {
+                    kinds.push((3, 1));
+                } else if u < 0.93 {
+                    kinds.push((0, 1));
+                } else if u < 0.96 {
+                    kinds.push(rng.weighted(&tl_w));
+                } else {
+                    kinds.push((rng.choice(&[1, 1, 1, 1, 2, 2]), 1));
+                }
+            }
+            for i in 1..kinds.len() {
+                let prev_drift = (-1 == kinds[i - 1].0) || kinds[i - 1].0 == 5 || kinds[i - 1].0 == 6;
+                if kinds[i].0 != -1 && prev_drift && rng.random() < 0.08 {
+                    kinds[i] = (if rng.random() < 0.75 { 7 } else { 8 }, 1);
+                }
+            }
+            for i in 1..n {
+                if kinds[i].0 == -1 && kinds[i - 1].0 == -1 {
+                    kinds[i] = (rng.choice(&[3, 0]), 1);
+                }
+            }
+            kinds
         }
-    }
-    for i in 1..kinds.len() {
-        let prev_drift = (-1 == kinds[i - 1].0) || kinds[i - 1].0 == 5 || kinds[i - 1].0 == 6;
-        if kinds[i].0 != -1 && prev_drift && rng.random() < 0.08 {
-            kinds[i] = (if rng.random() < 0.75 { 7 } else { 8 }, 1);
-        }
-    }
-    for i in 1..n {
-        if kinds[i].0 == -1 && kinds[i - 1].0 == -1 {
-            kinds[i] = (rng.choice(&[3, 0]), 1);
-        }
-    }
-    let normal_idx: Vec<usize> = (0..n).filter(|&i| kinds[i].0 != -1 && i > 1).collect();
+    };
+    let normal_idx: Vec<usize> =
+        (0..n).filter(|&i| kinds[i].0 != -1 && i > 1).collect();
     let share: f64 = normal_idx.iter().map(|&i| seg_dist[i]).sum();
     let share = if share == 0.0 { 1.0 } else { share };
     let mut disp_of = vec![0.0f64; n];
@@ -185,8 +262,13 @@ pub fn build(
             let (bx, by) = pos(s);
             x = bx;
             y = by;
-            jx = 0.72 * jx + rng.gauss(0.0, 0.75);
-            jy = 0.72 * jy + rng.gauss(0.0, 0.75);
+            if color_mode == TrackColorMode::FullGreen {
+                jx = 0.0;
+                jy = 0.0;
+            } else {
+                jx = 0.72 * jx + rng.gauss(0.0, 0.75);
+                jy = 0.72 * jy + rng.gauss(0.0, 0.75);
+            }
             px = bx + jx;
             py = by + jy;
             rad = round_to(
@@ -197,36 +279,18 @@ pub fn build(
                 },
                 2,
             );
-            state = if typ == 0 {
+            state = if color_mode == TrackColorMode::FullGreen {
+                1
+            } else if typ == 0 {
                 rng.weighted(&[(1, 145), (2, 45), (3, 164)])
             } else {
                 rng.weighted(&[(1, 145), (2, 256), (3, 151)])
             };
         } else {
-            match lt {
-                4 => {
-                    if rng.random() >= 0.68 {
-                        d_step = if rng.random() < 0.95 {
-                            rng.uniform(2.0, 60.0)
-                        } else {
-                            rng.uniform(60.0, 250.0)
-                        };
-                    }
-                }
-                1 => {
-                    if rng.random() >= 0.83 {
-                        d_step = rng.uniform(0.5, 36.0);
-                    }
-                }
-                12 => {
-                    d_step = if rng.random() < 0.9 {
-                        rng.uniform(5.0, 80.0)
-                    } else {
-                        rng.uniform(80.0, 220.0)
-                    };
-                }
-                5 => d_step = rng.uniform(5.0, 60.0),
-                _ => d_step = rng.uniform(100.0, 300.0),
+            // Keep the exception marker, but bound its coordinate drift. Large
+            // random offsets produce red route segments and false fastest paces.
+            if rng.random() >= 0.20 {
+                d_step = rng.uniform(0.0, MAX_EXCEPTION_DRIFT_M);
             }
             let (bx, by) = pos(s);
             x = bx;
@@ -243,15 +307,10 @@ pub fn build(
                 px = x + jx;
                 py = y + jy;
             }
-            rad = if lt == 4 {
-                round_to(
-                    if rng.random() < 0.75 {
-                        rng.uniform(30.0, 100.0)
-                    } else {
-                        rng.uniform(100.0, 550.0)
-                    },
-                    2,
-                )
+            rad = if typ == -1 {
+                round_to(rng.uniform(3.0, 10.0), 2)
+            } else if lt == 4 {
+                round_to(if rng.random() < 0.75 { rng.uniform(30.0, 100.0) } else { rng.uniform(100.0, 550.0) }, 2)
             } else if lt == 1 {
                 round_to(
                     if rng.random() < 0.75 {
@@ -284,16 +343,13 @@ pub fn build(
         let cad = (v_cad / stride_target * 60.0).clamp(100.0, 200.0);
         steps_acc += cad / 60.0 * dt;
         let nxt = pos(s + direction * 2.0);
-        let brg =
-            ((nxt.0 - x).atan2(nxt.1 - y).to_degrees() + rng.gauss(0.0, 35.0)).rem_euclid(360.0);
+        let brg = ((nxt.0 - x).atan2(nxt.1 - y).to_degrees() + rng.gauss(0.0, 35.0)).rem_euclid(360.0);
+        // 异常点（-1）：avgSpeed 为累计均值（真人与此一致，不为 0）；
+        // GPS 瞬时速度保持低速，避免尖峰污染最快配速。
         // 保留累计均值与 GPS 瞬时速度的轻微波动，但不生成越出跑步区域的漂移点。
         let (avg_sp, gps_speed) = if typ == -1 {
             let avg = round_to(dist_acc / t_acc.max(1.0), 4);
-            let gps = if rng.random() < 0.12 {
-                rng.uniform(15.0, 46.0)
-            } else {
-                rng.uniform(0.5, 6.0)
-            };
+            let gps = rng.uniform(0.5, MAX_EXCEPTION_GPS_SPEED_KMH);
             (avg, round_to(gps, 4))
         } else {
             let avg = round_to(d_step / dt, 4);
@@ -352,7 +408,11 @@ pub fn build(
             bdA: round_to(alt, 2),
             bdD: round_to(brg, 2),
             bdS: round_to((avg_sp * rng.uniform(0.6, 0.95)).max(0.0), 3),
-            bdG: rng.choice(&[1, 1, 1, -1]),
+            bdG: if color_mode == TrackColorMode::FullGreen {
+                1
+            } else {
+                rng.choice(&[1, 1, 1, -1])
+            },
             count: rng.randint(20, 88),
             dtr: 0.0,
             state,
@@ -385,7 +445,7 @@ pub fn build(
                 totalTime: round_to(seg_t, 0) as i64,
                 distance: round_to(seg_d, 0) as i64,
                 startTime: round_to((times[i] - seg_t) * 1000.0, 0) as i64,
-                endTime: round_to(times[i] * 1000.0, 0) as i64,
+                endTime: round_to((times[i] + dts[i]) * 1000.0, 0) as i64,
                 avgSpeed: round_to(seg_v.iter().sum::<f64>() / seg_v.len() as f64, 3),
                 avgStep: round_to(steps_acc / 1.0f64.max(t_acc) * 60.0, 0) as i64,
                 state: 0,
@@ -399,6 +459,24 @@ pub fn build(
     let _ = seg_n;
 
     apply_post_fixes(&mut locs, &mut rng, start_ms);
+
+    if color_mode == TrackColorMode::FullGreen {
+        // 详情页会根据这些字段给轨迹分段着色。统一普通点协议，保留
+        // 起点/终点哨兵，避免出现灰色段。
+        let last_index = locs.len().saturating_sub(1);
+        for (i, point) in locs.iter_mut().enumerate() {
+            point.ptype = if i == 1 {
+                5
+            } else if i == last_index {
+                6
+            } else {
+                0
+            };
+            point.locType = 1;
+            point.state = 1;
+            point.bdG = 1;
+        }
+    }
 
     // 点位吸附：<40m 精确落位
     for pl in points_bd {
@@ -434,5 +512,47 @@ pub fn build(
         speedPerTenSec: ten_speed,
         stepsPerTenSec: ten_steps,
         segments,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build, MAX_EXCEPTION_DRIFT_M, MAX_EXCEPTION_GPS_SPEED_KMH};
+    use crate::track::geom::{MET_PER_DEG_LAT, MET_PER_DEG_LNG};
+
+    #[test]
+    fn exception_points_cannot_create_map_scale_jumps_or_speed_spikes() {
+        let points = vec![
+            (39.9000, 116.4000),
+            (39.9000, 116.4020),
+            (39.9020, 116.4020),
+            (39.9020, 116.4000),
+        ];
+        for seed in 0..32 {
+            let track = build(2_000.0, 800, seed, points[0], 1_700_000_000_000, &points);
+            let mut exception_count = 0;
+            for (index, point) in track.locations.iter().enumerate() {
+                if point.ptype != -1 {
+                    continue;
+                }
+                exception_count += 1;
+                assert!(point.radius <= 10.0);
+                assert!(point.speed <= MAX_EXCEPTION_GPS_SPEED_KMH + 1e-9);
+                if let Some(previous) = index.checked_sub(1).and_then(|i| track.locations.get(i)) {
+                    let dx = (point.gLng - previous.gLng) * MET_PER_DEG_LNG;
+                    let dy = (point.gLat - previous.gLat) * MET_PER_DEG_LAT;
+                    assert!(
+                        (dx * dx + dy * dy).sqrt() <= 80.0,
+                        "exception jump at seed {seed}: {}m",
+                        (dx * dx + dy * dy).sqrt()
+                    );
+                }
+            }
+            // Campus routes no longer emit invalid (-1) drift points after the
+            // optional green-fence integration; if one appears it must still
+            // satisfy the bounds checked above.
+            assert_eq!(exception_count, 0, "seed {seed} emitted an invalid drift point");
+        }
+        assert!(MAX_EXCEPTION_DRIFT_M < 10.0);
     }
 }

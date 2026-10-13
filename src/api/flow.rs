@@ -9,10 +9,13 @@ use super::records::fetch_one_record;
 use super::submit::{submit_record, SubmitParams, SubmitResult};
 use crate::location::Coordinate;
 use crate::track::generate_road::RouteMode;
-use crate::track::generator::build as gen_track;
-use crate::track::wire::{build_obs_object_with_area, five_point_wrapper_with_area, obs_keys};
+use crate::track::generator::build_with_color_mode as gen_track;
+use crate::track::wire::{
+    build_obs_object, build_obs_object_with_area, five_point_wrapper, five_point_wrapper_with_area,
+    obs_keys, validate_five_point_wrapper,
+};
 use rand_distr::{Distribution, Normal};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[derive(Clone, Copy)]
 pub struct RunParams {
@@ -26,15 +29,164 @@ pub struct RunParams {
     pub manual_altitude: Option<f64>,
     /// 用户手动填写的海拔范围；与单值字段兼容，范围优先。
     pub manual_altitude_range: Option<crate::track::altitude::AltitudeRange>,
+    /// 详情页路线颜色模式。
+    pub track_color_mode: crate::api::model::TrackColorMode,
     pub seed: u64,
     /// 路线算法模式。
     pub route_mode: RouteMode,
+    /// 真实道路模式随机选中的普通打卡点数量（运行时可变）。
+    pub ordinary_pick: usize,
+    /// Optional standard athletics-track preset; Auto preserves route_mode behavior.
+    pub track_spec: crate::track::stadium::TrackSpec,
 }
 
 pub struct RunOutcome {
     pub result: SubmitResult,
     pub obs_ok: usize,
     pub detail_ok: bool,
+}
+
+/// 本地 dry-run 的摘要；不会读取会话、访问网络或上传任何数据。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DryRunSummary {
+    pub distance_m: f64,
+    pub duration_s: i64,
+    pub track_points: usize,
+    pub obs_keys: usize,
+    pub start_latitude: f64,
+    pub start_longitude: f64,
+    pub min_speed_mps: f64,
+    pub max_speed_mps: f64,
+}
+
+fn dry_run_points(anchor: Coordinate) -> Vec<Value> {
+    // 仅用于本地结构校验的四点小环；不会被当作实时点位或上传。
+    let lat = anchor.latitude;
+    let lon = anchor.longitude;
+    [
+        (lat - 0.0008, lon - 0.0010),
+        (lat - 0.0008, lon + 0.0010),
+        (lat + 0.0008, lon + 0.0010),
+        (lat + 0.0008, lon - 0.0010),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, (point_lat, point_lon))| {
+        json!({
+            "lat": point_lat,
+            "lon": point_lon,
+            "glat": point_lat,
+            "glon": point_lon,
+            "pointName": format!("dry-run-{i}"),
+            "isFixed": 1,
+        })
+    })
+    .collect()
+}
+
+/// 构造并校验一条完整本地记录，不创建 ApiClient，也不触发任何网络请求。
+pub fn run_dry_run(params: &RunParams, anchor: Coordinate) -> Result<DryRunSummary, String> {
+    anchor.validate()?;
+    if params.dist <= 0.0 || !params.dist.is_finite() {
+        return Err("dry-run 距离必须是正数".into());
+    }
+    if params.dur <= 0 {
+        return Err("dry-run 时长必须是正数".into());
+    }
+    if params.start_ms <= 0 {
+        return Err("dry-run 开始时间无效".into());
+    }
+
+    let live_points = dry_run_points(anchor);
+    let point_coords: Vec<(f64, f64)> = live_points
+        .iter()
+        .map(|p| {
+            let lat = p["lat"].as_f64().ok_or("dry-run 点位缺纬度")?;
+            let lon = p["lon"].as_f64().ok_or("dry-run 点位缺经度")?;
+            Coordinate::new(lat, lon, 0.0)?;
+            Ok((lat, lon))
+        })
+        .collect::<Result<_, String>>()?;
+    let mut track = gen_track(
+        params.dist,
+        params.dur,
+        params.seed,
+        (anchor.latitude, anchor.longitude),
+        params.start_ms,
+        &point_coords,
+        params.track_color_mode,
+    );
+    if let Some(range) = params.manual_altitude_range {
+        crate::track::altitude::override_bd_a_range(&mut track, range)?;
+    } else if let Some(altitude_m) = params.manual_altitude {
+        crate::track::altitude::override_bd_a(&mut track, altitude_m)?;
+    }
+    track.validate_consistency()?;
+
+    let five = five_point_wrapper(&live_points, track.startTime);
+    validate_five_point_wrapper(&five)?;
+    let obj = build_obs_object(&track, 0, "dry-run", 0, &live_points);
+    let keys = obs_keys(&track, 0, "dry-run");
+    if keys.len() != 2 {
+        return Err(format!("dry-run OBS key 数量异常: {}", keys.len()));
+    }
+    for key in [
+        "rrid",
+        "uuid",
+        "uid",
+        "run_data",
+        "fixed_point_json",
+        "segment_json",
+        "speed_json",
+        "step_freq_json",
+        "laps_json",
+        "runFaceCheck",
+    ] {
+        if obj
+            .get(key)
+            .and_then(Value::as_str)
+            .map(|value| value.is_empty())
+            .unwrap_or(true)
+        {
+            return Err(format!("dry-run OBS 字段为空: {key}"));
+        }
+    }
+
+    let speed_samples: Vec<f64> = track
+        .locations
+        .iter()
+        // avgSpeed 是轨迹生成器约束后的运动速度；speed 是协议中的 GPS
+        // 瞬时速度，允许为 0 或短时漂移尖峰，不能用它判断有效速度窗。
+        .map(|p| p.avgSpeed)
+        .filter(|speed| speed.is_finite() && *speed > 0.0)
+        .collect();
+    if speed_samples.is_empty() {
+        return Err("dry-run 没有可校验的有效速度样本".into());
+    }
+    let (min_speed_mps, max_speed_mps) = speed_samples
+        .into_iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(min, max), speed| {
+            (min.min(speed), max.max(speed))
+        });
+    if min_speed_mps < crate::track::generator::SPEED_FLOOR
+        || max_speed_mps > crate::track::generator::SPEED_CEIL
+    {
+        return Err(format!(
+            "dry-run 速度超出窗口: {:.3}..{:.3} m/s",
+            min_speed_mps, max_speed_mps
+        ));
+    }
+
+    Ok(DryRunSummary {
+        distance_m: track.totalDistance,
+        duration_s: track.totalTime,
+        track_points: track.locations.len(),
+        obs_keys: keys.len(),
+        start_latitude: track.startLatitude,
+        start_longitude: track.startLongitude,
+        min_speed_mps,
+        max_speed_mps,
+    })
 }
 
 fn sleep_secs(s: u64) {
@@ -117,50 +269,63 @@ pub fn run_full_flow(
         ));
     }
 
-    // ③ 轨迹生成（必经点 + 打卡点）
+    // ③ 轨迹生成（真实道路模式：必经点 + 随机普通点，全部强经过）
     let pts_bd = points::points_bd(&pts);
-    // 必经点保持策略顺序置于前端（waypoints[0] 即起点），剩余打卡点去重后按质心角
-    // 排序，使环序自然且不破坏必经点顺序。
-    let mut route_pts: Vec<(f64, f64)> = pol.must_points.clone();
-    let mut free: Vec<(f64, f64)> = Vec::new();
-    for p in &pts_bd {
-        if !route_pts
+    // 硬点 = 必经点(isFixed!=0，含策略 must_points) + 随机 ordinary_pick 个普通点；
+    // 按质心角排成自然环序，waypoints[0] 即起点，其余作为强制必经点强经过。
+    let mut fixed = points::points_fixed(&pts);
+    for &mp in &pol.must_points {
+        if !fixed
             .iter()
-            .any(|q| (q.0 - p.0).abs() < 1e-6 && (q.1 - p.1).abs() < 1e-6)
+            .any(|q| (q.0 - mp.0).abs() < 1e-6 && (q.1 - mp.1).abs() < 1e-6)
         {
-            free.push(*p);
+            fixed.push(mp);
         }
     }
-    if !free.is_empty() {
-        route_pts.extend(crate::track::generate_road::radial_order(&free));
-    }
-    if !pol.must_points.is_empty() {
-        log(&format!(
-            "√ [policy] 必经点 {} 个（保持顺序），合并后路线 waypoint 共 {} 个",
-            pol.must_points.len(),
-            route_pts.len()
-        ));
-        // 防御性日志：must_points 的「首个=起点」语义未经证实（提交时 skip(1) 依赖此假设），
-        // 逐点打印便于抓真实响应核对，避免首个必经点被静默丢弃。
-        for (i, &(mlat, mlon)) in pol.must_points.iter().enumerate() {
-            log(&format!(
-                "  [policy] must_points[{i}] BD=({mlat:.6},{mlon:.6}){}",
-                if i == 0 {
-                    "（假设为起点）"
-                } else {
-                    "（必经点）"
-                }
-            ));
-        }
-    } else {
-        log(&format!(
-            "[policy] 响应未含必经点列表，仅用打卡点 {} 个",
-            route_pts.len()
-        ));
+    let ordinary = points::points_free(&pts);
+    let route_pts =
+        crate::track::generate_road::select_route_points(&fixed, &ordinary, params.seed, params.ordinary_pick);
+    let picked = route_pts.len().saturating_sub(fixed.len());
+    log(&format!(
+        "√ [track] 硬点 {} 个（必经 {} + 随机普通 {}），普通点 {} 个（未选 {}）",
+        route_pts.len(),
+        fixed.len(),
+        picked,
+        ordinary.len(),
+        ordinary.len().saturating_sub(picked),
+    ));
+    for (i, &(lat, lon)) in route_pts.iter().enumerate() {
+        log(&format!("  [track] 硬点[{i}] BD=({lat:.6},{lon:.6})"));
     }
     if let Some(&(slat, slon)) = route_pts.first() {
         log(&format!("√ [track] 起点 BD=({slat:.6},{slon:.6})"));
     }
+    // 提交/OBS 只报实际经过的硬点（Road 模式），避免地图出现不在轨迹上的普通点；
+    // Legacy 走全部点位，保持原行为。
+    let submitted_pts: Vec<Value> = if params.route_mode == RouteMode::Road {
+        let sel: Vec<Value> = pts
+            .iter()
+            .filter(|p| {
+                let (Some(lat), Some(lon)) = (
+                    p.get("lat").and_then(|v| v.as_f64()),
+                    p.get("lon").and_then(|v| v.as_f64()),
+                ) else {
+                    return false;
+                };
+                route_pts
+                    .iter()
+                    .any(|q| (q.0 - lat).abs() < 1e-6 && (q.1 - lon).abs() < 1e-6)
+            })
+            .cloned()
+            .collect();
+        if sel.is_empty() {
+            pts.clone()
+        } else {
+            sel
+        }
+    } else {
+        pts.clone()
+    };
     // 用打卡点随机偏移更新锚点并持久化：下次拉点位即学校真实坐标，摆脱写死的默认值
     if !pts_bd.is_empty() {
         let idx = (rand::random::<f64>() * pts_bd.len() as f64) as usize;
@@ -206,7 +371,19 @@ pub fn run_full_flow(
     ));
     // 随机 0-4 秒偏移（终端上报的 flag 与首点差 <5s），轨迹/提交/OBS/五点统一使用
     let start_ms = params.start_ms + (rand::random::<i64>() % 5) * 1000;
-    let mut track = match params.route_mode {
+    let mut track = if params.track_spec != crate::track::stadium::TrackSpec::Auto {
+        log(&format!("[track] 使用{}操场模式", params.track_spec.label()));
+        crate::track::generator::build_stadium(
+            params.dist,
+            params.dur,
+            params.seed,
+            (anchor.latitude, anchor.longitude),
+            start_ms,
+            &pts_bd,
+            params.track_spec,
+        )?
+    } else {
+        match params.route_mode {
         RouteMode::Road => {
             let cfg = crate::api::model::load_config();
             if cfg.osm_path.is_empty() {
@@ -218,6 +395,7 @@ pub fn run_full_flow(
                     (anchor.latitude, anchor.longitude),
                     start_ms,
                     &pts_bd,
+                    params.track_color_mode,
                 )
             } else {
                 match crate::track::generate_road::load_network_path(&cfg.osm_path) {
@@ -243,10 +421,10 @@ pub fn run_full_flow(
                             },
                         };
                         let filtered = crate::track::generate_road::apply_fences(&net, &fences);
-                        // 强制必经点（不含起点）：其余打卡点仅软引导 + <40m 吸附
+                        // 硬点（不含起点）：必经点 + 随机普通点，全部强经过 + <40m 吸附
                         let must_bd: Vec<(f64, f64)> =
-                            pol.must_points.iter().skip(1).copied().collect();
-                        match crate::track::generate_road::build_road(
+                            route_pts.iter().skip(1).copied().collect();
+                        match crate::track::generate_road::build_road_with_color_mode(
                             params.dist,
                             params.dur,
                             params.seed,
@@ -254,6 +432,7 @@ pub fn run_full_flow(
                             &route_pts,
                             &must_bd,
                             &filtered,
+                            params.track_color_mode,
                         ) {
                             Ok(t) => {
                                 log(&format!(
@@ -273,6 +452,7 @@ pub fn run_full_flow(
                                     (anchor.latitude, anchor.longitude),
                                     start_ms,
                                     &pts_bd,
+                                    params.track_color_mode,
                                 )
                             }
                         }
@@ -286,6 +466,7 @@ pub fn run_full_flow(
                             (anchor.latitude, anchor.longitude),
                             start_ms,
                             &pts_bd,
+                            params.track_color_mode,
                         )
                     }
                 }
@@ -298,7 +479,9 @@ pub fn run_full_flow(
             (anchor.latitude, anchor.longitude),
             start_ms,
             &pts_bd,
+            params.track_color_mode,
         ),
+        }
     };
     if let Some(range) = params.manual_altitude_range {
         crate::track::altitude::override_bd_a_range(&mut track, range)?;
@@ -328,8 +511,8 @@ pub fn run_full_flow(
             .unwrap_or_default(),
     ));
 
-    // ④ 五点 wrapper（跑完态）
-    let five = five_point_wrapper_with_area(&pts, track.startTime, &area);
+    // ④ 五点 wrapper（跑完态，仅报实际经过的点并保留区域元数据）
+    let five = five_point_wrapper_with_area(&submitted_pts, track.startTime, &area);
     let _ = &five;
 
     // ⑤ 提交（sportType=1）
@@ -355,12 +538,7 @@ pub fn run_full_flow(
     let mut track_for_obs = sp.track.clone();
     track_for_obs.startTime = result.start_ms;
     let obj = build_obs_object_with_area(
-        &track_for_obs,
-        result.rrid,
-        &result.uuid,
-        sess.uid,
-        &pts,
-        &area,
+        &track_for_obs, result.rrid, &result.uuid, sess.uid, &submitted_pts, &area,
     );
     let payload = obj.to_string().into_bytes();
     let keys = obs_keys(&track_for_obs, result.rrid, &result.uuid);
@@ -414,6 +592,45 @@ pub fn run_ai_submit(
     let biz = super::ai::upload(client, sport_id, mode, None)?;
     log("√ [ai] 提交成功");
     Ok(biz)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{run_dry_run, RouteMode, RunParams};
+    use crate::location::Coordinate;
+
+    fn params() -> RunParams {
+        RunParams {
+            dist: 2_000.0,
+            dur: 800,
+            start_ms: 1_700_000_000_000,
+            face_check: 1,
+            manual_altitude: None,
+            manual_altitude_range: None,
+            track_color_mode: crate::api::model::TrackColorMode::FullGreen,
+            seed: 7,
+            route_mode: RouteMode::Legacy,
+            ordinary_pick: 0,
+            track_spec: crate::track::stadium::TrackSpec::Auto,
+        }
+    }
+
+    #[test]
+    fn dry_run_builds_and_validates_protocol_payloads() {
+        let summary = run_dry_run(&params(), Coordinate::new(39.9, 116.4, 0.0).unwrap()).unwrap();
+        assert_eq!(summary.duration_s, 800);
+        assert_eq!(summary.obs_keys, 2);
+        assert!(summary.track_points > 10);
+        assert!(summary.distance_m > 1_999.0 && summary.distance_m < 2_001.0);
+    }
+
+    #[test]
+    fn dry_run_rejects_invalid_parameters() {
+        let mut invalid = params();
+        invalid.dur = 0;
+        let error = run_dry_run(&invalid, Coordinate::new(39.9, 116.4, 0.0).unwrap()).unwrap_err();
+        assert!(error.contains("时长"));
+    }
 }
 
 /// AI 列表（UI 线程用）。

@@ -29,7 +29,11 @@ pub struct RecordRow {
 /// 拉取记录列表并归一化为行。
 pub fn fetch_records(client: &mut ApiClient) -> Result<Vec<RecordRow>, String> {
     let biz = client.call("POST", RECORDS_PATH, "{}", &[])?;
-    let arr: Vec<Value> = match parse_data_field(&biz) {
+    Ok(rows_from(records_array(&biz)))
+}
+
+fn records_array(biz: &Value) -> Vec<Value> {
+    match parse_data_field(biz) {
         Value::Array(a) => a,
         Value::Object(ref o) => o
             .get("list")
@@ -37,13 +41,15 @@ pub fn fetch_records(client: &mut ApiClient) -> Result<Vec<RecordRow>, String> {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default(),
-        _ => get_field(&biz, "list")
+        _ => get_field(biz, "list")
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default(),
-    };
-    Ok(arr
-        .iter()
+    }
+}
+
+fn rows_from(arr: Vec<Value>) -> Vec<RecordRow> {
+    arr.iter()
         .map(|r| RecordRow {
             rrid: r.get("rrid").and_then(|v| v.as_i64()).unwrap_or(0),
             total_dis: r.get("totalDis").and_then(|v| v.as_f64()).unwrap_or(0.0),
@@ -56,7 +62,7 @@ pub fn fetch_records(client: &mut ApiClient) -> Result<Vec<RecordRow>, String> {
             total_steps: r.get("totalSteps").and_then(|v| v.as_i64()).unwrap_or(0),
             uuid: r.get("uuid").and_then(|v| v.as_str()).unwrap_or("").into(),
         })
-        .collect())
+        .collect()
 }
 
 /// 单条详情（验证提交结果用）：返回内层 data 对象。
@@ -199,5 +205,19 @@ mod tests {
             assert!(v.get(key).is_some(), "缺少键 {key}");
         }
         assert!(v.get("total_dis").is_none());
+    }
+
+    #[test]
+    fn parses_wrapped_string_records_fixture() {
+        let raw = include_str!("fixtures/records_wrapped_string.json");
+        let value: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let rows = rows_from(records_array(&value));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].rrid, 42);
+        assert_eq!(rows[0].total_dis, 2500.0);
+        assert_eq!(rows[0].total_time, 1200);
+        assert!(rows[0].complete);
+        assert_eq!(rows[0].avg_step_freq, 165);
+        assert_eq!(rows[0].uuid, "fixture-uuid");
     }
 }

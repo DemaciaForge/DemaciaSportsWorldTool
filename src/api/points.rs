@@ -451,6 +451,29 @@ pub fn points_bd(points: &[Value]) -> Vec<(f64, f64)> {
         .collect()
 }
 
+/// 点位 → BD 系 (lat, lon)，按 `isFixed` 分类。
+fn points_by_fixed(points: &[Value], fixed: bool) -> Vec<(f64, f64)> {
+    points
+        .iter()
+        .filter(|p| (p.get("isFixed").and_then(|v| v.as_i64()).unwrap_or(0) != 0) == fixed)
+        .filter_map(|p| {
+            let lat = p.get("lat")?.as_f64()?;
+            let lon = p.get("lon")?.as_f64()?;
+            Some((lat, lon))
+        })
+        .collect()
+}
+
+/// 必经点（`isFixed != 0`，BD 系）。
+pub fn points_fixed(points: &[Value]) -> Vec<(f64, f64)> {
+    points_by_fixed(points, true)
+}
+
+/// 普通打卡点（`isFixed == 0` 或缺失，BD 系）。
+pub fn points_free(points: &[Value]) -> Vec<(f64, f64)> {
+    points_by_fixed(points, false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
