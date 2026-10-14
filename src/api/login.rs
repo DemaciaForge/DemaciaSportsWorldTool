@@ -140,7 +140,7 @@ pub fn login(
         .unwrap_or("")
         .to_string();
     if uid < 1 || token.is_empty() {
-        return Err(format!("登录响应缺 uid/token: {}", truncate(&biz.to_string(), 200)));
+        return Err(format!("登录响应缺 uid/token: {}", truncate(&crate::textlog::redact_json(&biz).to_string(), 200)));
     }
     let sess = Session {
         uid,
@@ -168,7 +168,7 @@ pub fn login(
     eprintln!(
         "[session] uid={} token={} unid={} name={} weight={} device={}",
         sess.uid,
-        &sess.token,
+        &crate::textlog::mask(&sess.token),
         sess.unid,
         sess.name,
         sess.weight,

@@ -104,7 +104,7 @@ impl ApiClient {
     }
 
     /// 指定域名业务请求（排行榜/违规名单走 DISCOVERY，信封链相同）。
-    /// 每次调用打完整解密响应日志。
+    /// 每次调用打印敏感字段打码后的解密响应日志。
     pub fn call_host(
         &mut self,
         host: &str,
@@ -128,7 +128,7 @@ impl ApiClient {
                 return Err(e);
             }
         };
-        let biz_str = serde_json::to_string(&business).unwrap_or_default();
+        let biz_str = serde_json::to_string(&crate::textlog::redact_json(&business)).unwrap_or_default();
         eprintln!("[resp] {} -> {} ({}B) {}", path, out.http_status, out.raw_len, biz_str);
         Ok(business)
     }
