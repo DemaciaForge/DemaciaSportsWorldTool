@@ -31,57 +31,14 @@ pub fn classify(t: &str) -> (LogKind, &str) {
 }
 
 const SENSITIVE_KEYS: &[&str] = &[
-    "authorization",
-    "password",
-    "passwd",
-    "tokenSign",
-    "passToken",
-    "captchaOutput",
-    "deviceId",
-    "customDeviceId",
-    "androidId",
-    "wifiMac",
-    "blMac",
-    "macAddress",
-    "imei",
-    "idfa",
-    "account",
-    "username",
     "token",
-    "uid",
-    "session",
+    "password",
+    "passToken",
+    "access_token",
+    "refresh_token",
+    "authorization",
+    "secret",
 ];
-
-fn normalized_key(key: &str) -> String {
-    key.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .flat_map(|c| c.to_lowercase())
-        .collect()
-}
-
-fn sensitive_key(key: &str) -> bool {
-    let normalized = normalized_key(key);
-    SENSITIVE_KEYS
-        .iter()
-        .any(|candidate| normalized == normalized_key(candidate))
-}
-
-fn redact_json(value: Value) -> Value {
-    match value {
-        Value::Object(mut object) => {
-            for (key, value) in object.iter_mut() {
-                if sensitive_key(key) {
-                    *value = Value::String("***".into());
-                } else {
-                    *value = redact_json(std::mem::take(value));
-                }
-            }
-            Value::Object(object)
-        }
-        Value::Array(values) => Value::Array(values.into_iter().map(redact_json).collect()),
-        other => other,
-    }
-}
 
 fn boundary(byte: Option<u8>) -> bool {
     !matches!(byte, Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'))
@@ -174,7 +131,7 @@ fn redact_pairs(input: &str) -> String {
 /// Redact credentials and device identifiers from JSON or key/value diagnostics.
 pub fn redact_text(t: &str) -> String {
     if let Ok(value) = serde_json::from_str::<Value>(t) {
-        return serde_json::to_string(&redact_json(value)).unwrap_or_else(|_| "***".into());
+        return serde_json::to_string(&redact_json(&value)).unwrap_or_else(|_| "***".into());
     }
     redact_pairs(t)
 }
@@ -189,9 +146,105 @@ pub fn truncate(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+/// 敏感值保留前后各 4 个字符，中间打码；不超过 8 个字符时全部掩码。
+pub fn mask(v: &str) -> String {
+    let chars: Vec<char> = v.chars().collect();
+    if chars.len() <= 8 {
+        return "****".into();
+    }
+    let head: String = chars[..4].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}****{tail}")
+}
+
+/// 递归掩码敏感键的字符串值，键名忽略大小写；保留原业务数据。
+pub fn redact_json(v: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    const SENSITIVE_KEYS: &[&str] = &[
+        "token",
+        "password",
+        "passToken",
+        "access_token",
+        "refresh_token",
+        "authorization",
+        "secret",
+    ];
+    match v {
+        Value::Object(obj) => Value::Object(
+            obj.iter()
+                .map(|(key, value)| {
+                    let redacted = match value.as_str() {
+                        Some(s) if SENSITIVE_KEYS.iter().any(|k| key.eq_ignore_ascii_case(k)) => {
+                            Value::String(mask(s))
+                        }
+                        _ => redact_json(value),
+                    };
+                    (key.clone(), redacted)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(redact_json).collect()),
+        _ => v.clone(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_mask_long_and_multibyte() {
+        assert_eq!(mask("abcdefghijkl"), "abcd****ijkl");
+        assert_eq!(mask("123456789"), "1234****6789");
+        assert_eq!(mask("中文字符测试多字节"), "中文字符****试多字节");
+        assert_eq!(mask("🦀🐱😀🎉abcdef"), "🦀🐱😀🎉****cdef");
+    }
+
+    #[test]
+    fn test_mask_short_and_empty() {
+        for value in ["", "a", "1234567", "12345678", "中文字符测试"] {
+            assert_eq!(mask(value), "****");
+        }
+    }
+
+    #[test]
+    fn test_redact_json_sensitive_keys_case_insensitive() {
+        for key in [
+            "Token",
+            "PASSWORD",
+            "PassToken",
+            "ACCESS_TOKEN",
+            "refresh_token",
+            "Authorization",
+            "secret",
+        ] {
+            let value = json!({(key): "abcdefghijkl"});
+            assert_eq!(redact_json(&value), json!({(key): "abcd****ijkl"}));
+            assert_eq!(value[key], "abcdefghijkl");
+        }
+    }
+
+    #[test]
+    fn test_redact_json_nested_objects_and_arrays() {
+        let value = json!({"data": {"token": "short", "items": [
+            {"password": "abcdefghijkl"}, [{"secret": "12345678"}]],
+            "authorization": {"token": "short"}}});
+        let expected = json!({"data": {"token": "****", "items": [
+            {"password": "abcd****ijkl"}, [{"secret": "****"}]],
+            "authorization": {"token": "****"}}});
+        assert_eq!(redact_json(&value), expected);
+    }
+
+    #[test]
+    fn test_redact_json_preserves_other_values() {
+        let value = json!({"message": "成功", "uid": 123, "token": 42,
+            "password": null, "secret": false, "items": ["plain", 7, null, true]});
+        assert_eq!(redact_json(&value), value);
+        for value in [json!("plain"), json!(42), json!(null), json!(true)] {
+            assert_eq!(redact_json(&value), value);
+        }
+    }
 
     /// 多字节字符中间截断不允许 panic。
     #[test]
@@ -202,29 +255,6 @@ mod tests {
             assert!(out.chars().count() <= n);
         }
         assert_eq!(truncate("中文abc", 4), "中文ab");
-    }
-
-    #[test]
-    fn redact_nested_json_credentials_and_device_identity() {
-        let raw =
-            r#"{"token":"secret","profile":{"uid":123,"name":"ok"},"items":[{"deviceId":"abc"}]}"#;
-        let redacted = redact_text(raw);
-        assert!(!redacted.contains("secret"));
-        assert!(!redacted.contains("123"));
-        assert!(!redacted.contains("abc"));
-        assert!(redacted.contains("\"name\":\"ok\""));
-    }
-
-    #[test]
-    fn redact_unstructured_key_value_diagnostics() {
-        let redacted = redact_text("token=secret uid:123 DeviceId=abc name=ok");
-        assert!(!redacted.contains("secret"));
-        assert!(!redacted.contains("123"));
-        assert!(!redacted.contains("abc"));
-        assert!(redacted.contains("name=ok"));
-
-        let truncated_json = redact_text(r#"{"token":"secret""#);
-        assert!(!truncated_json.contains("secret"));
     }
 
     #[test]

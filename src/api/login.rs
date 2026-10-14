@@ -153,10 +153,7 @@ pub fn login(
         .unwrap_or("")
         .to_string();
     if uid < 1 || token.is_empty() {
-        return Err(format!(
-            "登录响应缺 uid/token: {}",
-            truncate(&biz.to_string(), 200)
-        ));
+        return Err(format!("登录响应缺 uid/token: {}", truncate(&crate::textlog::redact_json(&biz).to_string(), 200)));
     }
     let sess = Session {
         uid,
@@ -186,11 +183,13 @@ pub fn login(
         eprintln!("[login] 会话保存失败: {e}");
     }
     eprintln!(
-        "{}",
-        crate::textlog::redact_text(&format!(
-            "[session] uid={} token={} unid={} name={} weight={} deviceId={}",
-            sess.uid, sess.token, sess.unid, sess.name, sess.weight, sess.device_id
-        ))
+        "[session] uid={} token={} unid={} name={} weight={} device={}",
+        sess.uid,
+        &crate::textlog::mask(&sess.token),
+        sess.unid,
+        sess.name,
+        sess.weight,
+        &sess.device_id
     );
     eprintln!(
         "[session] profile 字段数={}",
