@@ -126,9 +126,7 @@ fn cmd_run(rest: &[&str]) -> i32 {
         Some("mixed") | Some("gray") | Some("grey") | Some("half-green-gray") => {
             model::TrackColorMode::HalfGreenGray
         }
-        Some("green") | Some("full-green") | Some("full_green") => {
-            model::TrackColorMode::FullGreen
-        }
+        Some("green") | Some("full-green") | Some("full_green") => model::TrackColorMode::FullGreen,
         Some(value) => {
             eprintln!("--track-color 必须是 full-green 或 half-green-gray（收到 {value}）");
             return 1;
@@ -254,17 +252,27 @@ fn cmd_route(rest: &[&str]) -> i32 {
         origin: origin.to_string(),
         destination: destination.to_string(),
         loop_mode: get(&flags, "loop").is_some(),
-        laps: get(&flags, "laps").and_then(|v| v.parse().ok()).unwrap_or(0),
+        laps: get(&flags, "laps")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
     };
     match crate::amap::fetch_custom_ring(&spec, &key) {
         Ok(ring) => {
             println!("高德自定义路线预览（仅本地，不上传）");
             println!(
                 "模式：{}",
-                if ring.loop_mode { "绕圈（去程+返程闭环）" } else { "单程" }
+                if ring.loop_mode {
+                    "绕圈（去程+返程闭环）"
+                } else {
+                    "单程"
+                }
             );
             println!("去程：{:.0} m", ring.leg_length_m);
-            println!("闭环总长：{:.0} m（{} 个折线点）", ring.total_length_m, ring.points_bd.len());
+            println!(
+                "闭环总长：{:.0} m（{} 个折线点）",
+                ring.total_length_m,
+                ring.points_bd.len()
+            );
             if spec.laps > 0 {
                 println!(
                     "圈数：{} 圈 → {:.0} m",
@@ -452,11 +460,17 @@ fn cmd_records_raw(rest: &[&str]) -> i32 {
             } else if n > 0 {
                 println!(
                     "首条: {}",
-                    crate::textlog::redact_text(&crate::textlog::truncate(&arr[0].to_string(), 300))
+                    crate::textlog::redact_text(&crate::textlog::truncate(
+                        &arr[0].to_string(),
+                        300
+                    ))
                 );
                 println!(
                     "末条: {}",
-                    crate::textlog::redact_text(&crate::textlog::truncate(&arr[n - 1].to_string(), 300))
+                    crate::textlog::redact_text(&crate::textlog::truncate(
+                        &arr[n - 1].to_string(),
+                        300
+                    ))
                 );
             } else {
                 println!(

@@ -71,6 +71,27 @@ impl TrackDimensions {
 /// Fit a standard oval around the live checkpoints and return it in the same
 /// local metre plane used by the regular track generator.
 pub fn make_stadium_ring(points: &[(f64, f64)], spec: TrackSpec) -> Result<PointRing, String> {
+    if points.len() < 3 {
+        return Err("服务器打卡点不足，无法定位标准跑道".into());
+    }
+    make_stadium_ring_relaxed(points, spec, false)
+}
+
+/// 以「让每个打卡点都落在跑道上」为目标拟合标准跑道。
+///
+/// 与 [`make_stadium_ring`] 的区别只有一处：不拒绝「打卡点偏差超出预设置信度」的
+/// 点位。用于两种场景：
+///
+/// - 服务端把跑道边线、不同圈数的入口都当成打卡点，预设容差（半径 30% + 3 m）
+///   会把这类真实点位判成"不匹配"；
+/// - 兜底：没有任何可用几何时，以打卡点质心为中心直接摆一条标准跑道。
+///
+/// 校验语义仍然保留：返回的环在几何上一定是标准跑道尺寸。
+pub fn make_stadium_ring_relaxed(
+    points: &[(f64, f64)],
+    spec: TrackSpec,
+    skip_pose_check: bool,
+) -> Result<PointRing, String> {
     let dimensions = spec
         .dimensions()
         .ok_or_else(|| "请选择有效的操场规格".to_string())?;
@@ -107,13 +128,10 @@ pub fn make_stadium_ring(points: &[(f64, f64)], spec: TrackSpec) -> Result<Point
         .iter()
         .map(|&point| {
             let aligned = rotate(point, -angle);
-            distance_to_centerline(
-                (aligned.0 - offset.0, aligned.1 - offset.1),
-                dimensions,
-            )
+            distance_to_centerline((aligned.0 - offset.0, aligned.1 - offset.1), dimensions)
         })
         .fold(0.0, f64::max);
-    if furthest > tolerance {
+    if furthest > tolerance && !skip_pose_check {
         return Err(format!(
             "服务器打卡点与{}跑道不匹配：最大偏差 {:.1}m（允许 {:.1}m）",
             spec.label(),
@@ -170,8 +188,7 @@ fn fit_pose(points: &[(f64, f64)], dimensions: TrackDimensions) -> (f64, (f64, f
     let mut best_error = f64::INFINITY;
     let mut best_offset = bbox_center(points);
     for index in 0..=180 {
-        let angle = -std::f64::consts::FRAC_PI_2
-            + index as f64 * std::f64::consts::PI / 180.0;
+        let angle = -std::f64::consts::FRAC_PI_2 + index as f64 * std::f64::consts::PI / 180.0;
         let rotated: Vec<_> = points.iter().map(|&point| rotate(point, -angle)).collect();
         let offset = bbox_center(&rotated);
         let error = rotated
@@ -202,8 +219,8 @@ fn rounded_rectangle(dimensions: TrackDimensions) -> Vec<(f64, f64)> {
         points.push((-straight / 2.0 + straight * t, radius));
     }
     for index in 0..arc_count {
-        let angle = std::f64::consts::FRAC_PI_2
-            - std::f64::consts::PI * index as f64 / arc_count as f64;
+        let angle =
+            std::f64::consts::FRAC_PI_2 - std::f64::consts::PI * index as f64 / arc_count as f64;
         points.push((straight / 2.0 + radius * angle.cos(), radius * angle.sin()));
     }
     for index in 0..straight_count {
@@ -211,16 +228,20 @@ fn rounded_rectangle(dimensions: TrackDimensions) -> Vec<(f64, f64)> {
         points.push((straight / 2.0 - straight * t, -radius));
     }
     for index in 0..arc_count {
-        let angle = -std::f64::consts::FRAC_PI_2
-            - std::f64::consts::PI * index as f64 / arc_count as f64;
+        let angle =
+            -std::f64::consts::FRAC_PI_2 - std::f64::consts::PI * index as f64 / arc_count as f64;
         points.push((-straight / 2.0 + radius * angle.cos(), radius * angle.sin()));
     }
     points
 }
 
 fn bbox_center(points: &[(f64, f64)]) -> (f64, f64) {
-    let (mut min_x, mut max_x, mut min_y, mut max_y) =
-        (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+    let (mut min_x, mut max_x, mut min_y, mut max_y) = (
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    );
     for &(x, y) in points {
         min_x = min_x.min(x);
         max_x = max_x.max(x);

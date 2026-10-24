@@ -8,6 +8,8 @@ pub mod generator;
 pub mod geom;
 pub mod model;
 pub mod postfix;
+pub mod realism;
+pub mod shape;
 pub mod stadium;
 pub mod wire;
 
@@ -108,7 +110,10 @@ mod tests {
                 );
             }
         }
-        assert!(exception_count > 0, "test track should exercise exception points");
+        assert!(
+            exception_count > 0,
+            "test track should exercise exception points"
+        );
     }
 
     /// 选点：必经点全选 + 普通点恰好取 pick 个，seed 可复现，不足则全取。
@@ -134,8 +139,12 @@ mod tests {
         let few = select_route_points(&fixed, &[(9.0, 9.0)], 1, DEFAULT_ORDINARY_PICK);
         assert_eq!(few.len(), 2);
         // fixed 与 ordinary 重叠时去重，不重复
-        let overlap =
-            select_route_points(&[(1.0, 1.0)], &[(1.0, 1.0), (2.0, 2.0)], 7, DEFAULT_ORDINARY_PICK);
+        let overlap = select_route_points(
+            &[(1.0, 1.0)],
+            &[(1.0, 1.0), (2.0, 2.0)],
+            7,
+            DEFAULT_ORDINARY_PICK,
+        );
         assert_eq!(overlap.len(), 2);
     }
 
@@ -189,9 +198,10 @@ mod tests {
             track.locations.iter().all(|point| point.ptype != -1),
             "campus track must not contain invalid drift points"
         );
-        // 总距离精确等于目标（±0.5m 舍入容差）
+        // 声明距离取自「按坐标实测的位移」，与规划值的偏差控制在 3% 以内
+        // （偏差来自横向漂移与进场/离场段的几何，属于真实轨迹固有的那一部分）。
         assert!(
-            (track.totalDistance - 3300.0).abs() < 0.5,
+            (track.totalDistance / 3300.0 - 1.0).abs() < 0.03,
             "dist={}",
             track.totalDistance
         );
@@ -215,7 +225,7 @@ mod tests {
         }
         // 距离只由正常点承担：终点哨兵(type=6)携带全程累计距离
         assert!(
-            (track.locations.last().unwrap().totalDis - 3300.0).abs() < 2.0,
+            (track.locations.last().unwrap().totalDis - track.totalDistance).abs() < 1.0,
             "末点={}",
             track.locations.last().unwrap().totalDis
         );
@@ -255,7 +265,13 @@ mod tests {
         );
         let last = track.locations.len() - 1;
         for (i, point) in track.locations.iter().enumerate() {
-            let expected_type = if i == 1 { 5 } else if i == last { 6 } else { 0 };
+            let expected_type = if i == 1 {
+                5
+            } else if i == last {
+                6
+            } else {
+                0
+            };
             assert_eq!(point.ptype, expected_type);
             assert_eq!(point.locType, 1);
             assert_eq!(point.state, 1);
@@ -279,11 +295,16 @@ mod tests {
         }));
     }
 
-    /// 打卡点吸附：轨迹必过点位（<40m 落位）。
+    /// 打卡点吸附：轨迹必过点位。
+    ///
+    /// 吸附半径仍是 40 m，但 40 m 以内的**走不过去**的点不再硬吸（旧实现会造出
+    /// 10–100 m/s 的瞬移）。这里断言的是「轨迹确实经过大部分点位附近」，未命中的
+    /// 点由跑步页提示「本次可能不计入有效成绩」。
     #[test]
     fn test_point_snapping() {
         let pts = sample_points();
         let track = build(2200.0, 900, 7, (38.9, 121.54), 1_788_958_186_123, &pts);
+        let mut near = 0;
         for pl in &pts {
             let min_m = track
                 .locations
@@ -294,12 +315,21 @@ mod tests {
                     .sqrt()
                 })
                 .fold(f64::INFINITY, f64::min);
-            assert!(min_m < 1.0, "点位吸附失败: {min_m}m");
+            if min_m < 40.0 {
+                near += 1;
+            }
         }
+        assert!(
+            near >= pts.len() - 2,
+            "轨迹应经过多数点位附近（{near}/{}）",
+            pts.len()
+        );
     }
 
     /// 10 秒窗均值配速全部落在有效窗口内（判定规则 2'21"-10'00"/km），且总距精确。
-    /// 逐点 avgSpeed 允许越界（真人爬坡期同样低于窗口，见 OBS 样本）。
+    ///
+    /// 首窗允许放宽：t=0 的首点是「开始记录还没迈步」，真人记录的首个 10 s 窗
+    /// 本来就比匀速慢（真机样本同样如此），因此首窗按 20'00"/km 判。
     #[test]
     fn test_speeds_within_valid_pace_window() {
         let pts = sample_points();
@@ -315,14 +345,23 @@ mod tests {
                 let t = build(dist, dur, seed, (38.9, 121.54), 1_788_958_186_123, &pts);
                 for (i, w) in t.speedPerTenSec.iter().enumerate() {
                     let pace = 1000.0 / (w.value / 10.0); // 秒/km
+                                                          // 首尾窗允许放宽：t=0 的首点是「开始记录还没迈步」，末窗是
+                                                          // 结尾断崖（收速）所在的窗口，真机记录里这两端都比匀速慢。
+                    let ceil = if i == 0 {
+                        1200.0
+                    } else if i + 1 == t.speedPerTenSec.len() {
+                        750.0
+                    } else {
+                        600.0
+                    };
                     assert!(
-                        (141.0..=600.0).contains(&pace),
+                        (141.0..=ceil).contains(&pace),
                         "seed={seed} dist={dist} 窗{i} 配速 {}/km 越界",
                         format_args!("{}:{:02}", pace as i64 / 60, (pace as i64) % 60)
                     );
                 }
                 assert!(
-                    (t.totalDistance - dist).abs() < 2.0,
+                    (t.totalDistance / dist - 1.0).abs() < 0.05,
                     "seed={seed} dist={}: {}",
                     dist,
                     t.totalDistance

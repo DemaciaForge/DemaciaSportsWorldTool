@@ -1,7 +1,7 @@
 //! Shared desktop and Android application.
 
-mod api;
 mod amap;
+mod api;
 pub mod cli;
 mod crypto;
 pub mod location;

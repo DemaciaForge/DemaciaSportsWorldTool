@@ -87,7 +87,9 @@ impl Track {
     }
 
     pub fn validate_consistency(&self) -> Result<Coordinate, String> {
-        if self.totalTime <= 0 || self.totalDistance <= 0.0 { return Err("轨迹时长和距离必须为正数".into()); }
+        if self.totalTime <= 0 || self.totalDistance <= 0.0 {
+            return Err("轨迹时长和距离必须为正数".into());
+        }
         let (mut prev_time, mut prev_dis, mut prev_valid_time, mut prev_valid_dis, mut prev_steps) =
             (0, 0.0, 0, 0.0, 0);
         for point in &self.locations {
@@ -100,7 +102,13 @@ impl Track {
             {
                 return Err("轨迹点累计时间、距离或步数回退".into());
             }
-            (prev_time, prev_dis, prev_valid_time, prev_valid_dis, prev_steps) = (
+            (
+                prev_time,
+                prev_dis,
+                prev_valid_time,
+                prev_valid_dis,
+                prev_steps,
+            ) = (
                 point.totalTime,
                 point.totalDis,
                 point.validTime,

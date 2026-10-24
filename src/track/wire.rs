@@ -207,7 +207,11 @@ fn validate_fence_metadata(outer: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod validation_tests {
     use super::*;
-    #[test] fn rejects_empty_or_malformed_five_point_payload() { assert!(validate_five_point_wrapper("{}").is_err()); assert!(validate_five_point_wrapper(r#"{"fivePointJson":"[]"}"#).is_err()); }
+    #[test]
+    fn rejects_empty_or_malformed_five_point_payload() {
+        assert!(validate_five_point_wrapper("{}").is_err());
+        assert!(validate_five_point_wrapper(r#"{"fivePointJson":"[]"}"#).is_err());
+    }
 
     fn five_point_wrapper_without_fence_fields() -> Value {
         json!({
@@ -299,8 +303,16 @@ mod validation_tests {
 
     #[test]
     fn area_metadata_is_written_to_fixed_point_wrapper() {
-        let area = RunAreaMeta { run_area_id: 42, geo_fences_json: "[{\"x\":1}]".into(), freedom_show_fence: true };
-        let wrapper = five_point_wrapper_with_area(&[json!({"lat": 39.9, "lon": 116.4, "glat": 39.9, "glon": 116.4})], 1_700_000_000_000, &area);
+        let area = RunAreaMeta {
+            run_area_id: 42,
+            geo_fences_json: "[{\"x\":1}]".into(),
+            freedom_show_fence: true,
+        };
+        let wrapper = five_point_wrapper_with_area(
+            &[json!({"lat": 39.9, "lon": 116.4, "glat": 39.9, "glon": 116.4})],
+            1_700_000_000_000,
+            &area,
+        );
         let value: Value = serde_json::from_str(&wrapper).unwrap();
         assert_eq!(value["runAreaId"], 42);
         assert_eq!(value["geoFencesJson"], "[{\"x\":1}]");
@@ -316,7 +328,8 @@ mod validation_tests {
             "glon": 116.4,
             "isFixed": 0,
         })];
-        let value: Value = serde_json::from_str(&five_point_wrapper(&points, 1_700_000_000_000)).unwrap();
+        let value: Value =
+            serde_json::from_str(&five_point_wrapper(&points, 1_700_000_000_000)).unwrap();
         let raw = value["fivePointJson"].as_str().unwrap();
         let fixed: Value = serde_json::from_str(raw).unwrap();
         assert_eq!(fixed[0]["isFixed"], 1);
@@ -515,4 +528,3 @@ pub fn obs_keys(track: &Track, rrid: i64, uuid: &str) -> Vec<String> {
         format!("run_data/{}/{}.json", rrid / 1000000, rrid),
     ]
 }
-

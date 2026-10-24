@@ -153,7 +153,10 @@ pub fn login(
         .unwrap_or("")
         .to_string();
     if uid < 1 || token.is_empty() {
-        return Err(format!("登录响应缺 uid/token: {}", truncate(&crate::textlog::redact_json(&biz).to_string(), 200)));
+        return Err(format!(
+            "登录响应缺 uid/token: {}",
+            truncate(&crate::textlog::redact_json(&biz).to_string(), 200)
+        ));
     }
     let sess = Session {
         uid,

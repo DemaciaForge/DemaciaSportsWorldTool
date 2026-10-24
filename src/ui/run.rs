@@ -476,7 +476,15 @@ impl App {
                 mobile::row(ui, |ui| {
                     ui.checkbox(&mut page.custom_loop, "绕圈跑（去程+返程闭环）");
                     ui.label("圈数：");
-                    mobile::drag_i64(ui, "run_custom_laps", &mut page.custom_laps, 0..=99, 1.0, "", "（0=按距离自动）");
+                    mobile::drag_i64(
+                        ui,
+                        "run_custom_laps",
+                        &mut page.custom_laps,
+                        0..=99,
+                        1.0,
+                        "",
+                        "（0=按距离自动）",
+                    );
                 });
                 mobile::row(ui, |ui| {
                     let busy = page.custom_status.starts_with("获取中");
@@ -902,7 +910,9 @@ impl App {
         {
             let cp = egui::Color32::from_rgb(240, 180, 0);
             for (la, lo) in crate::api::points::points_bd(&pts) {
-                self.run_page.map.draw_point(&painter, canvas, la, lo, cp, 3.0);
+                self.run_page
+                    .map
+                    .draw_point(&painter, canvas, la, lo, cp, 3.0);
             }
         }
         if let Some(first) = ring.points_bd.first() {

@@ -182,9 +182,8 @@ pub fn select_route_points(
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed ^ 0x5EED_C0FF_EE00_1234);
     let mut pool = ordinary.to_vec();
     pool.shuffle(&mut rng);
-    let near = |a: &(f64, f64), b: &(f64, f64)| {
-        (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6
-    };
+    let near =
+        |a: &(f64, f64), b: &(f64, f64)| (a.0 - b.0).abs() < 1e-6 && (a.1 - b.1).abs() < 1e-6;
     let mut selected: Vec<(f64, f64)> = fixed.to_vec();
     for p in pool.into_iter().take(pick) {
         if !selected.iter().any(|q| near(q, &p)) {
@@ -349,9 +348,8 @@ pub fn build_road_with_color_mode(
                 }
             }
             for i in 1..kinds.len() {
-                let prev_drift = (-1 == kinds[i - 1].0)
-                    || kinds[i - 1].0 == 5
-                    || kinds[i - 1].0 == 6;
+                let prev_drift =
+                    (-1 == kinds[i - 1].0) || kinds[i - 1].0 == 5 || kinds[i - 1].0 == 6;
                 if kinds[i].0 != -1 && prev_drift && rng.random() < 0.08 {
                     kinds[i] = (if rng.random() < 0.75 { 7 } else { 8 }, 1);
                 }

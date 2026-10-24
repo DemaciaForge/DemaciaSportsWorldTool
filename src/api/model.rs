@@ -316,7 +316,10 @@ mod storage_tests {
         }))
         .unwrap();
         assert_eq!(mixed.track_color_mode, TrackColorMode::HalfGreenGray);
-        assert_eq!(serde_json::to_value(&mixed).unwrap()["track_color_mode"], "half_green_gray");
+        assert_eq!(
+            serde_json::to_value(&mixed).unwrap()["track_color_mode"],
+            "half_green_gray"
+        );
     }
 
     #[test]

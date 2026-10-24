@@ -24,8 +24,12 @@ fn http_get_json(url: &str, query: &[(&str, &str)]) -> Result<serde_json::Value,
     }
     let resp = req.call().map_err(ureq_err)?;
     let body = resp.into_string().unwrap_or_default();
-    serde_json::from_str::<serde_json::Value>(&body)
-        .map_err(|e| format!("高德响应 JSON 解析失败: {e}（原文: {}）", crate::textlog::truncate(&body, 120)))
+    serde_json::from_str::<serde_json::Value>(&body).map_err(|e| {
+        format!(
+            "高德响应 JSON 解析失败: {e}（原文: {}）",
+            crate::textlog::truncate(&body, 120)
+        )
+    })
 }
 
 fn check_status(v: &serde_json::Value) -> Result<(), String> {
@@ -79,7 +83,10 @@ pub fn resolve_to_gcj(spec: &str, key: &str) -> Result<(f64, f64), String> {
     }
     let v = http_get_json(GEO_URL, &[("address", spec), ("key", key)])?;
     check_status(&v)?;
-    let geocodes = v.get("geocodes").and_then(|g| g.as_array()).ok_or("高德地址解析无结果")?;
+    let geocodes = v
+        .get("geocodes")
+        .and_then(|g| g.as_array())
+        .ok_or("高德地址解析无结果")?;
     let location = geocodes
         .first()
         .and_then(|g| g.get("location"))
@@ -107,7 +114,11 @@ pub fn walking_leg(
     let destination = format!("{:.7},{:.7}", to_gcj.1, to_gcj.0);
     let v = http_get_json(
         WALK_URL,
-        &[("origin", origin.as_str()), ("destination", destination.as_str()), ("key", key)],
+        &[
+            ("origin", origin.as_str()),
+            ("destination", destination.as_str()),
+            ("key", key),
+        ],
     )?;
     check_status(&v)?;
     let route = v.get("route").ok_or("高德步行规划响应缺少 route")?;
@@ -117,7 +128,10 @@ pub fn walking_leg(
         .and_then(|a| a.first())
         .ok_or("高德步行规划无可用路线")?;
     let distance = path.get("distance").and_then(as_f64_compat).unwrap_or(0.0);
-    let steps = path.get("steps").and_then(|s| s.as_array()).ok_or("路线缺少 steps")?;
+    let steps = path
+        .get("steps")
+        .and_then(|s| s.as_array())
+        .ok_or("路线缺少 steps")?;
     let mut pts: Vec<(f64, f64)> = Vec::new();
     for step in steps {
         let poly = step.get("polyline").and_then(|p| p.as_str()).unwrap_or("");

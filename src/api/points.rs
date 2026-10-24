@@ -257,8 +257,7 @@ pub(crate) fn area_from_payload(
             .and_then(|value| value_as_i64(&value))
             .filter(|id| *id >= 0)
     });
-    let mut fences =
-        find_value_recursive(payload, &fence_names, 8).filter(usable_fence);
+    let mut fences = find_value_recursive(payload, &fence_names, 8).filter(usable_fence);
     let mut show = find_true_field(payload, &show_names, 8)
         .or_else(|| find_value_recursive(payload, &show_names, 8));
     for point in points {

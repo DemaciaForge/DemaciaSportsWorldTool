@@ -157,8 +157,12 @@ impl ApiClient {
                 return Err(e);
             }
         };
-        let biz_str = serde_json::to_string(&crate::textlog::redact_json(&business)).unwrap_or_default();
-        eprintln!("[resp] {} -> {} ({}B) {}", path, out.http_status, out.raw_len, biz_str);
+        let biz_str =
+            serde_json::to_string(&crate::textlog::redact_json(&business)).unwrap_or_default();
+        eprintln!(
+            "[resp] {} -> {} ({}B) {}",
+            path, out.http_status, out.raw_len, biz_str
+        );
         Ok(business)
     }
 }
@@ -205,7 +209,10 @@ pub fn ureq_err(e: ureq::Error) -> String {
     match e {
         ureq::Error::Status(code, resp) => {
             let body = resp.into_string().unwrap_or_default();
-            format!("HTTP {code}: {}", crate::textlog::redact_text(&crate::textlog::truncate(&body, 300)))
+            format!(
+                "HTTP {code}: {}",
+                crate::textlog::redact_text(&crate::textlog::truncate(&body, 300))
+            )
         }
         ureq::Error::Transport(t) => format!("网络错误: {t}"),
     }
