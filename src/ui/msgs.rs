@@ -2,9 +2,8 @@
 
 use super::about::FinishAction;
 use super::{
-    App, PopupInfo, AI_DETAIL, AI_DONE, AI_LIST, AI_RECORDS, CHEAT, CUSTOM_ROUTE_DONE, FENCE_DONE,
-    IP, LOGIN_DONE, POINTS_DONE, RANK, RECORDS, RUN_DETAIL, RUN_DONE, SEMESTER, UPDATE_CHK,
-    UPDATE_DONE, UPDATE_PROG, USER,
+    App, PopupInfo, CHEAT, CUSTOM_ROUTE_DONE, FENCE_DONE, IP, LOGIN_DONE, POINTS_DONE, RANK,
+    RECORDS, RUN_DETAIL, RUN_DONE, SEMESTER, UPDATE_CHK, UPDATE_DONE, UPDATE_PROG, USER,
 };
 use crate::api::model;
 use chrono::TimeZone;
@@ -14,17 +13,13 @@ impl App {
         let mut done_ip = None;
         let mut done_login = None;
         let mut done_run = None;
-        let mut done_ai = None;
         let mut done_fence = false;
         let mut done_points = false;
         let mut records_json = None;
-        let mut ai_list_json = None;
         let mut semester_json = None;
         let mut cheat_json = None;
         let mut rank_json = None;
         let mut user_json = None;
-        let mut ai_records_json = None;
-        let mut ai_detail_raw = None;
         let mut detail_raw = None;
         let mut update_chk = None;
         let mut update_prog = None;
@@ -41,12 +36,8 @@ impl App {
                 done_login = Some(v.to_string());
             } else if let Some(v) = msg.strip_prefix(RUN_DONE) {
                 done_run = Some(v.to_string());
-            } else if let Some(v) = msg.strip_prefix(AI_DONE) {
-                done_ai = Some(v.to_string());
             } else if let Some(v) = msg.strip_prefix(RECORDS) {
                 records_json = Some(v.to_string());
-            } else if let Some(v) = msg.strip_prefix(AI_LIST) {
-                ai_list_json = Some(v.to_string());
             } else if let Some(v) = msg.strip_prefix(SEMESTER) {
                 semester_json = Some(v.to_string());
             } else if let Some(v) = msg.strip_prefix(CHEAT) {
@@ -59,15 +50,9 @@ impl App {
                 } else {
                     self.user_busy = false;
                 }
-            } else if let Some(v) = msg.strip_prefix(AI_RECORDS) {
-                ai_records_json = Some(v.to_string());
             } else if let Some(v) = msg.strip_prefix(RUN_DETAIL) {
                 if let Ok(raw) = serde_json::from_str::<serde_json::Value>(v) {
                     detail_raw = Some(raw);
-                }
-            } else if let Some(v) = msg.strip_prefix(AI_DETAIL) {
-                if let Ok(raw) = serde_json::from_str::<serde_json::Value>(v) {
-                    ai_detail_raw = Some(raw);
                 }
             } else if let Some(v) = msg.strip_prefix(UPDATE_CHK) {
                 update_chk = Some(v.to_string());
@@ -85,26 +70,6 @@ impl App {
         let got_cheat = cheat_json.is_some();
         let got_rank = rank_json.is_some();
 
-        // OSM 路网加载回传
-        while let Ok(res) = self.net_rx.try_recv() {
-            self.osm_page.busy = false;
-            match res {
-                Ok(net) => {
-                    let nodes = net.graph.node_count();
-                    let bld = net.buildings.len();
-                    self.osm_page.fitted = false;
-                    self.osm_page.status = format!("√ 路网加载成功：{nodes} 节点 / {bld} 建筑");
-                    self.log
-                        .push(&format!("[osm] 路网加载成功：{nodes} 节点 / {bld} 建筑"));
-                    self.network = Some(net);
-                    self.run_page.preview_stale = true;
-                }
-                Err(e) => {
-                    self.osm_page.status = format!("路网加载失败：{e}");
-                    self.log.push(&format!("[osm] 路网加载失败：{e}"));
-                }
-            }
-        }
         if let Some(ip) = done_ip {
             self.ip = ip;
         }
@@ -151,8 +116,6 @@ impl App {
                 self.refresh_data_page();
                 self.refresh_records();
                 self.refresh_user_page();
-                self.refresh_ai_list();
-                self.refresh_fence();
                 self.refresh_points();
             } else {
                 self.status = format!(
@@ -180,16 +143,7 @@ impl App {
                 self.status = format!("跑步提交失败：{}", val["message"].as_str().unwrap_or(""));
             }
         }
-        if let Some(v) = done_ai {
-            self.ai_busy = false;
-            let val: serde_json::Value = serde_json::from_str(&v).unwrap_or_default();
-            if val.get("ok").and_then(|b| b.as_bool()).unwrap_or(false) {
-                self.status = "AI 运动提交成功".into();
-                self.popup = Some(ai_popup(&val));
-            } else {
-                self.status = format!("AI 提交失败：{}", val["message"].as_str().unwrap_or(""));
-            }
-        }
+
         if let Some(v) = records_json {
             self.records_busy = false;
             match serde_json::from_str::<Vec<crate::api::records::RecordRow>>(&v) {
@@ -198,17 +152,6 @@ impl App {
                     self.records_page.rows = rows;
                 }
                 Err(_) => self.status = "记录数据解析失败".into(),
-            }
-        }
-        if let Some(v) = ai_list_json {
-            self.ai_busy = false;
-            match serde_json::from_str::<Vec<crate::api::ai::AiSport>>(&v) {
-                Ok(list) => {
-                    self.status = format!("已拉取 {} 个 AI 项目", list.len());
-                    self.ai_page.list = list;
-                    self.ai_page.selected = 0;
-                }
-                Err(_) => self.status = "AI 列表解析失败".into(),
             }
         }
         if let Some(v) = semester_json {
@@ -259,20 +202,6 @@ impl App {
                         .cloned()
                         .unwrap_or(serde_json::Value::Null),
                 });
-            }
-        }
-        if let Some(raw) = ai_detail_raw {
-            self.records_page.ai_detail_raw = Some(raw);
-            self.records_page.ai_detail_loading = false;
-        }
-        if let Some(v) = ai_records_json {
-            self.records_busy = false;
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&v) {
-                self.records_page.ai_groups = val
-                    .get("groups")
-                    .and_then(|x| serde_json::from_value(x.clone()).ok())
-                    .unwrap_or_default();
-                self.records_page.ai_total = val.get("total").and_then(|x| x.as_i64()).unwrap_or(0);
             }
         }
         if let Some(raw) = detail_raw {
@@ -450,45 +379,5 @@ fn run_popup(v: &serde_json::Value) -> PopupInfo {
     PopupInfo {
         title: "跑步结果".into(),
         lines,
-    }
-}
-
-fn ai_popup(v: &serde_json::Value) -> PopupInfo {
-    if v["batch"].as_bool().unwrap_or(false) {
-        return PopupInfo {
-            title: "AI 批量补签结果".into(),
-            lines: vec![
-                format!(
-                    "成功：{}/{}",
-                    v["success"].as_i64().unwrap_or(0),
-                    v["total"].as_i64().unwrap_or(0)
-                ),
-                format!(
-                    "覆盖：{} 天 × 每天 {} 次 × {} 个项目",
-                    v["days"].as_i64().unwrap_or(0),
-                    v["per_day"].as_i64().unwrap_or(0),
-                    v["sports"].as_i64().unwrap_or(0)
-                ),
-            ],
-        };
-    }
-    PopupInfo {
-        title: "AI 运动提交结果".into(),
-        lines: vec![
-            format!("项目 sportId：{}", v["sport_id"].as_i64().unwrap_or(0)),
-            format!("模式：{}", v["mode"].as_str().unwrap_or("")),
-            format!("成绩：{}", v["score"].as_str().unwrap_or("")),
-            format!(
-                "用时：{:.1} 秒 · 速度 {}/分 · 消耗 {:.1}",
-                v["secs"].as_f64().unwrap_or(0.0),
-                v["per_min"].as_i64().unwrap_or(0),
-                v["consume"].as_f64().unwrap_or(0.0),
-            ),
-            format!(
-                "服务器：{} {}",
-                v["resp_error"].as_i64().unwrap_or(0),
-                v["resp_msg"].as_str().unwrap_or("")
-            ),
-        ],
     }
 }

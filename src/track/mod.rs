@@ -1,9 +1,31 @@
 //! 轨迹层：生成器 / OBS 组装 / 官方卡路里。
 
+/// 路线算法模式。
+///
+/// 路网（Road）模式已删除：它自带一套速度剖面与字段逻辑、不走 `assemble`，
+/// 是维护负担的主要来源。剩下经典打卡点环与高德自定义路线两条路径。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum RouteMode {
+    /// 经典打卡点环（Catmull-Rom）。
+    #[default]
+    Legacy,
+    /// 自定义路线（高德步行路径）。
+    Custom,
+}
+
+impl RouteMode {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "custom" => RouteMode::Custom,
+            _ => RouteMode::Legacy,
+        }
+    }
+}
+
 pub mod altitude;
+pub mod biomech;
 pub mod calorie;
 pub mod custom;
-pub mod generate_road;
 pub mod generator;
 pub mod geom;
 pub mod model;
@@ -15,7 +37,6 @@ pub mod wire;
 
 #[cfg(test)]
 mod tests {
-    use super::generate_road::{build_road, select_route_points, DEFAULT_ORDINARY_PICK};
     use super::generator::build;
     use super::generator::build_with_color_mode;
     use super::geom::{MET_PER_DEG_LAT, MET_PER_DEG_LNG};
@@ -32,160 +53,6 @@ mod tests {
             (38.899823, 121.541010),
             (38.900455, 121.539512),
         ]
-    }
-
-    /// 在打卡点质心周围构建 7x7 网格路网（双向，约 111m 间距）。
-    fn road_grid() -> route_planner::RoadGraph {
-        let pts = sample_points();
-        let n = pts.len() as f64;
-        let (clat, clng) = (
-            pts.iter().map(|p| p.0).sum::<f64>() / n,
-            pts.iter().map(|p| p.1).sum::<f64>() / n,
-        );
-        let mut g = route_planner::RoadGraph::new();
-        let step = 0.0012;
-        let mut nodes = vec![];
-        for j in 0..7i64 {
-            for i in 0..7i64 {
-                let lat = clat + (j as f64 - 3.0) * step;
-                let lon = clng + (i as f64 - 3.0) * step;
-                nodes.push(g.add_node(route_planner::Coord::new(lon, lat)));
-            }
-        }
-        let mut wid = 1u64;
-        let add_edge = |g: &mut route_planner::RoadGraph, a, b, wid| {
-            let d = route_planner::graph::EdgeData {
-                way_id: wid,
-                oneway: false,
-                highway: "residential".into(),
-                maxspeed_kmh: None,
-                length_m: 111.0,
-            };
-            g.add_edge(a, b, d.clone());
-            g.add_edge(b, a, d);
-        };
-        for j in 0..7usize {
-            for i in 0..6usize {
-                let a = nodes[j * 7 + i];
-                let b = nodes[j * 7 + i + 1];
-                add_edge(&mut g, a, b, wid);
-                wid += 1;
-            }
-        }
-        for i in 0..7usize {
-            for j in 0..6usize {
-                let a = nodes[j * 7 + i];
-                let b = nodes[(j + 1) * 7 + i];
-                add_edge(&mut g, a, b, wid);
-                wid += 1;
-            }
-        }
-        g.compute_anchor();
-        g.rebuild_index();
-        g
-    }
-
-    fn assert_exception_points_are_bounded(track: &super::model::Track) {
-        let mut exception_count = 0;
-        for (index, point) in track.locations.iter().enumerate() {
-            if point.ptype != -1 {
-                continue;
-            }
-            exception_count += 1;
-            assert!(point.radius <= 10.0, "exception radius={}", point.radius);
-            assert!(point.speed <= super::generator::MAX_EXCEPTION_GPS_SPEED_KMH + 1e-9);
-            for neighbor in [
-                index.checked_sub(1),
-                (index + 1 < track.locations.len()).then_some(index + 1),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                let other = &track.locations[neighbor];
-                let dx = (point.gLng - other.gLng) * MET_PER_DEG_LNG;
-                let dy = (point.gLat - other.gLat) * MET_PER_DEG_LAT;
-                assert!(
-                    (dx * dx + dy * dy).sqrt() <= 45.0,
-                    "exception neighbor jump too large"
-                );
-            }
-        }
-        assert!(
-            exception_count > 0,
-            "test track should exercise exception points"
-        );
-    }
-
-    /// 选点：必经点全选 + 普通点恰好取 pick 个，seed 可复现，不足则全取。
-    #[test]
-    fn test_select_route_points() {
-        let fixed = vec![(1.0, 1.0)];
-        let ordinary = vec![(2.0, 2.0), (3.0, 3.0), (4.0, 4.0), (5.0, 5.0)];
-        let sel = select_route_points(&fixed, &ordinary, 42, DEFAULT_ORDINARY_PICK);
-        assert_eq!(sel.len(), 1 + DEFAULT_ORDINARY_PICK, "sel={sel:?}");
-        assert!(sel.contains(&(1.0, 1.0)), "必经点必须入选");
-        // 同 seed 可复现
-        assert_eq!(
-            sel,
-            select_route_points(&fixed, &ordinary, 42, DEFAULT_ORDINARY_PICK)
-        );
-        // pick 可变：取 3 个普通点
-        assert_eq!(
-            select_route_points(&fixed, &ordinary, 42, 3).len(),
-            4,
-            "pick=3 应含必经 + 3 普通"
-        );
-        // 普通点不足：有几个取几个
-        let few = select_route_points(&fixed, &[(9.0, 9.0)], 1, DEFAULT_ORDINARY_PICK);
-        assert_eq!(few.len(), 2);
-        // fixed 与 ordinary 重叠时去重，不重复
-        let overlap = select_route_points(
-            &[(1.0, 1.0)],
-            &[(1.0, 1.0), (2.0, 2.0)],
-            7,
-            DEFAULT_ORDINARY_PICK,
-        );
-        assert_eq!(overlap.len(), 2);
-    }
-
-    /// 点位数分类：isFixed 字段决定必经/普通。
-    #[test]
-    fn test_points_fixed_free_split() {
-        let pts = vec![
-            serde_json::json!({"lat": 1.0, "lon": 1.0, "isFixed": 1}),
-            serde_json::json!({"lat": 2.0, "lon": 2.0, "isFixed": 0}),
-            serde_json::json!({"lat": 3.0, "lon": 3.0}),
-        ];
-        assert_eq!(crate::api::points::points_fixed(&pts), vec![(1.0, 1.0)]);
-        assert_eq!(
-            crate::api::points::points_free(&pts),
-            vec![(2.0, 2.0), (3.0, 3.0)]
-        );
-    }
-
-    /// 模式 B（真实道路路由）：距离精确、哨兵/断崖语义与模式 A 一致。
-    #[test]
-    fn test_build_road_distribution() {
-        let pts = sample_points();
-        let net = road_grid();
-        let start = 1_788_958_186_123i64;
-        let track = build_road(3300.0, 1220, 42, start, &pts, &pts[1..], &net).expect("build_road");
-        assert!(
-            (track.totalDistance - 3300.0).abs() < 0.5,
-            "dist={}",
-            track.totalDistance
-        );
-        assert_eq!(track.totalTime, 1220);
-        assert!(!track.locations.is_empty());
-        assert!([0, 7].contains(&track.locations[0].ptype));
-        assert_eq!(track.locations[1].ptype, 5);
-        assert_eq!(track.locations.last().unwrap().ptype, 6);
-        // 步数为正
-        assert!(track.totalSteps > 500, "steps={}", track.totalSteps);
-        assert!(
-            track.locations.iter().all(|point| point.ptype != -1),
-            "full-green road mode must not emit invalid drift points"
-        );
     }
 
     /// 轨迹生成抽样断言：距离精确、采样间隔分布、哨兵/断崖/位移语义。
@@ -383,53 +250,15 @@ mod tests {
         assert!((lng - 121.5337497718317).abs() < 1e-9, "lng={lng}");
     }
 
-    /// 坐标基准变换：gcj02_to_bd09 是 bd09_to_gcj02 的逆；WGS84→BD 有境内偏移。
+    /// 坐标基准变换：gcj02_to_bd09 是 bd09_to_gcj02 的逆。
     #[test]
     fn test_coord_datum_roundtrip() {
-        use super::geom::{gcj02_to_bd09, wgs84_to_bd09};
+        use super::geom::gcj02_to_bd09;
         let bd = (38.901678, 121.540241);
         let gcj = bd09_to_gcj02(bd.0, bd.1);
         let back = gcj02_to_bd09(gcj.0, gcj.1);
         assert!((back.0 - bd.0).abs() < 1e-6, "lat={} 期望 {}", back.0, bd.0);
         assert!((back.1 - bd.1).abs() < 1e-6, "lng={} 期望 {}", back.1, bd.1);
-        // WGS84 校园坐标转 BD 后应带明显偏移（约 0.004~0.006 度）
-        let wgs = (38.8956, 121.5337);
-        let bd2 = wgs84_to_bd09(wgs.0, wgs.1);
-        assert!((bd2.0 - wgs.0).abs() > 0.003, "lat 偏移过小 {}", bd2.0);
-        assert!((bd2.1 - wgs.1).abs() > 0.003, "lng 偏移过小 {}", bd2.1);
-    }
-
-    /// 围栏裁剪：保留边整体都在围栏内，不允许「端点在内、中段越出」的穿越边。
-    #[test]
-    fn test_apply_fences_clips_crossing_edges() {
-        use super::generate_road::apply_fences;
-        use route_planner::{point_in_polygon, Coord};
-        let net = road_grid();
-        let pts = sample_points();
-        let n = pts.len() as f64;
-        let (clat, clng) = (
-            pts.iter().map(|p| p.0).sum::<f64>() / n,
-            pts.iter().map(|p| p.1).sum::<f64>() / n,
-        );
-        let s = 0.0020;
-        let fence: Vec<(f64, f64)> = vec![
-            (clat - s, clng - s),
-            (clat - s, clng + s),
-            (clat + s, clng + s),
-            (clat + s, clng - s),
-        ];
-        let polys: Vec<Coord> = fence.iter().map(|p| Coord::new(p.1, p.0)).collect();
-        let g = apply_fences(&net, &[fence]);
-        assert!(g.graph.edge_count() > 0, "裁剪后仍应有道路");
-        for e in g.edges_deg() {
-            let a = e[0];
-            let b = e[1];
-            for k in 0..=8 {
-                let t = k as f64 / 8.0;
-                let c = Coord::new(a.lon + (b.lon - a.lon) * t, a.lat + (b.lat - a.lat) * t);
-                assert!(point_in_polygon(&polys, c), "边越出围栏");
-            }
-        }
     }
 
     /// OBS 对象：10 键、gzip+base64 可解、run_data 27 键点集。

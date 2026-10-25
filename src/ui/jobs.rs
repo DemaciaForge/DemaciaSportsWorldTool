@@ -1,22 +1,16 @@
 //! 后台任务与消息处理：IP 获取 / 登录 / 刷新 / 消息协议分发。
 
 use super::{
-    App, AI_DETAIL, AI_LIST, AI_RECORDS, CHEAT, FENCE_DONE, IP, LOGIN_DONE, POINTS_DONE, RANK,
-    RECORDS, RUN_DETAIL, SEMESTER, UPDATE_CHK, UPDATE_DONE, UPDATE_PROG, USER,
+    App, CHEAT, IP, LOGIN_DONE, POINTS_DONE, RANK, RECORDS, RUN_DETAIL, SEMESTER, UPDATE_CHK,
+    UPDATE_DONE, UPDATE_PROG, USER,
 };
 use crate::api::model;
-use crate::track::generate_road::RouteMode;
 use crate::update::ReleaseInfo;
 
 impl App {
     /// 任一后台任务进行中（更新前的打断保护）。
     pub fn any_busy(&self) -> bool {
-        self.login_busy
-            || self.run_busy
-            || self.ai_busy
-            || self.records_busy
-            || self.data_busy
-            || self.user_busy
+        self.login_busy || self.run_busy || self.records_busy || self.data_busy || self.user_busy
     }
 
     /// 检查更新；manual=true 时切到关于页并显示状态。
@@ -80,36 +74,9 @@ impl App {
         });
     }
 
-    /// 后台拉取电子围栏并落盘（供预览裁剪/居中复用），完成后触发预览刷新。
-    /// 仅在真实道路路由模式下才需要围栏，避免经典模式用户也进入该端点请求指纹。
-    pub(crate) fn refresh_fence(&self) {
-        if self.run_page.route_mode != RouteMode::Road {
-            return;
-        }
-        let Some(session) = self.session.clone() else {
-            return;
-        };
-        let identity = self.identity.clone();
-        self.spawn_job(move |tx| {
-            let mut log = App::logger(tx.clone());
-            let mut client = crate::api::client::ApiClient::new(identity, Some(session));
-            match crate::api::fence::fetch_geo_fence(&mut client) {
-                Ok(f) => {
-                    let _ = crate::api::model::save_fence_cache(&f);
-                    log(&format!("√ [fence] 电子围栏已缓存 {} 个", f.len()));
-                    tx.send(FENCE_DONE.to_string()).ok();
-                }
-                Err(e) => log(&format!("⚠ [fence] 电子围栏获取失败: {e}")),
-            }
-        });
-    }
-
-    /// 后台拉取实时点位并落盘（供路线预览使用），完成后触发预览刷新。
-    /// 复用 fetch_points 的 TTL 缓存，仅在 Road 模式且锚点已配置时拉取。
+    /// 后台拉取实时点位并落盘（供预览使用），完成后触发预览刷新。
+    /// 复用 fetch_points 的 TTL 缓存；锚点未配置时不拉取。
     pub(crate) fn refresh_points(&self) {
-        if self.run_page.route_mode != RouteMode::Road {
-            return;
-        }
         let Some(session) = self.session.clone() else {
             return;
         };
@@ -237,29 +204,6 @@ impl App {
         });
         self.status = "已登出".into();
     }
-
-    pub fn refresh_ai_list(&mut self) {
-        let Some(session) = self.session.clone() else {
-            self.status = "请先登录".into();
-            return;
-        };
-        let identity = self.identity.clone();
-        self.ai_busy = true;
-        self.status = "AI 列表拉取中…".into();
-        self.spawn_job(move |tx| {
-            let mut log = App::logger(tx.clone());
-            let mut client = crate::api::client::ApiClient::new(identity, Some(session));
-            let payload = match crate::api::flow::run_ai_list(&mut client, &mut log) {
-                Ok(list) => serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()),
-                Err(e) => {
-                    log(&format!("× AI 列表拉取失败: {e}"));
-                    "[]".to_string()
-                }
-            };
-            tx.send(format!("{AI_LIST}{payload}")).ok();
-        });
-    }
-
     pub fn refresh_records(&mut self) {
         let Some(session) = self.session.clone() else {
             self.status = "请先登录".into();
@@ -326,70 +270,6 @@ impl App {
                     tx.send(format!("{RUN_DETAIL}{payload}")).ok();
                 }
             }
-        });
-    }
-
-    /// 拉取单条 AI 记录全量详情。
-    pub fn fetch_ai_detail(&mut self, id: i64) {
-        let Some(session) = self.session.clone() else {
-            return;
-        };
-        let identity = self.identity.clone();
-        self.records_page.ai_detail_loading = true;
-        self.spawn_job(move |tx| {
-            let mut client = crate::api::client::ApiClient::new(identity, Some(session));
-            let payload = match crate::api::ai::fetch_record_detail(&mut client, id) {
-                Ok(d) => d.to_string(),
-                Err(e) => serde_json::json!({ "fetchError": e }).to_string(),
-            };
-            tx.send(format!("{AI_DETAIL}{payload}")).ok();
-        });
-    }
-
-    /// AI 记录：遍历全部项目合并（按天排序）。
-    pub fn refresh_ai_records(&mut self) {
-        let Some(session) = self.session.clone() else {
-            self.status = "请先登录".into();
-            return;
-        };
-        let identity = self.identity.clone();
-        self.records_busy = true;
-        self.spawn_job(move |tx| {
-            let mut log = App::logger(tx.clone());
-            let mut client = crate::api::client::ApiClient::new(identity, Some(session));
-            // 先拉项目列表
-            let list = match crate::api::ai::fetch_list(&mut client) {
-                Ok(l) => l,
-                Err(e) => {
-                    log(&format!("× [ai] 项目列表拉取失败: {e}"));
-                    tx.send(format!("{AI_RECORDS}{{\"groups\":[],\"total\":0}}"))
-                        .ok();
-                    return;
-                }
-            };
-            let mut all_groups: Vec<crate::api::ai::AiRecordGroup> = Vec::new();
-            let mut total = 0i64;
-            for sport in &list {
-                match crate::api::ai::fetch_records(&mut client, sport.id, 50) {
-                    Ok(page) => {
-                        for mut g in page.groups {
-                            for r in &mut g.records {
-                                r.name = format!("{} {}", sport.name, r.name);
-                            }
-                            all_groups.push(g);
-                        }
-                        total += page.total_count;
-                    }
-                    Err(e) => log(&format!("× [ai] {} 拉取失败: {e}", sport.name)),
-                }
-                std::thread::sleep(std::time::Duration::from_millis(300));
-            }
-            all_groups.sort_by_key(|a| std::cmp::Reverse(a.score_date));
-            let count: usize = all_groups.iter().map(|g| g.records.len()).sum();
-            log(&format!("√ [ai] {} 个项目共 {} 条记录", list.len(), count));
-            let payload = serde_json::json!({ "groups": all_groups, "total": total });
-            tx.send(format!("{AI_RECORDS}{payload}")).ok();
-            tx.send("__AI_RECORDS_DONE__".to_string()).ok();
         });
     }
 

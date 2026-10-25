@@ -70,6 +70,7 @@ impl TrackDimensions {
 
 /// Fit a standard oval around the live checkpoints and return it in the same
 /// local metre plane used by the regular track generator.
+#[cfg_attr(not(test), allow(dead_code))] // 测试构造跑道环
 pub fn make_stadium_ring(points: &[(f64, f64)], spec: TrackSpec) -> Result<PointRing, String> {
     if points.len() < 3 {
         return Err("服务器打卡点不足，无法定位标准跑道".into());
@@ -87,6 +88,7 @@ pub fn make_stadium_ring(points: &[(f64, f64)], spec: TrackSpec) -> Result<Point
 /// - 兜底：没有任何可用几何时，以打卡点质心为中心直接摆一条标准跑道。
 ///
 /// 校验语义仍然保留：返回的环在几何上一定是标准跑道尺寸。
+#[cfg_attr(not(test), allow(dead_code))] // 测试构造跑道环（放宽校验）
 pub fn make_stadium_ring_relaxed(
     points: &[(f64, f64)],
     spec: TrackSpec,

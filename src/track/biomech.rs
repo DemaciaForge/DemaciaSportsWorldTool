@@ -1,15 +1,20 @@
 //! 生物力学联动：配速 v、步频 f_cadence、步幅 L_stride 的非线性耦合。
 //!
+//! 原先放在 `crates/route-planner` 里，随路网模式一起被引入；但它是**所有生成模式
+//! 共用**的（经典/跑道/自定义都要步频-步幅自洽），因此路网删除后迁到这里。
+//!
 //!   硬约束：v = (f_cadence / 60) · L_stride   （v: m/s，f: 步/分，L: 米）
 //!
 //! 由速度与疲劳度确定 (步频, 步幅)，**始终严格满足等式**。
 
 /// 步态结果。
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)] // stride 由测试断言 v = cadence/60*stride 时读取
 pub struct Gait {
     /// 步频（步/分）。
     pub cadence: f64,
     /// 步幅（米）。
+    #[cfg_attr(not(test), allow(dead_code))] // 步幅：测试断言 v = cadence/60*stride
     pub stride: f64,
 }
 
@@ -31,17 +36,8 @@ pub fn gait(v: f64, fatigue: f64) -> Gait {
     Gait { cadence, stride }
 }
 
-/// 由速度与疲劳度取步幅（米），包络 [0.55, 1.35]。
-pub fn stride_for(v: f64, fatigue: f64) -> f64 {
-    gait(v, fatigue).stride
-}
-
-/// 由速度反解步频（步/分）。
-pub fn cadence_for(v: f64, stride: f64) -> f64 {
-    (60.0 * v / stride.max(1e-6)).clamp(110.0, 220.0)
-}
-
 /// 由步频与步幅计算速度（m/s）。
+#[cfg_attr(not(test), allow(dead_code))] // 仅供测试使用
 pub fn speed_from(cadence: f64, stride: f64) -> f64 {
     (cadence / 60.0) * stride
 }

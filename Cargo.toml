@@ -7,7 +7,7 @@ license = "CC-BY-NC-4.0"
 repository = "https://github.com/DemaciaForge/DemaciaSportsWorldTool"
 
 [workspace]
-members = [".", "crates/route-planner"]
+members = ["."]
 resolver = "2"
 
 [lib]
@@ -23,7 +23,6 @@ gui = ["dep:eframe", "dep:egui", "dep:egui_extras", "dep:rfd"]
 android = ["gui", "eframe/android-native-activity", "dep:android-activity", "dep:android_logger", "dep:jni", "dep:log", "dep:winit"]
 
 [dependencies]
-route-planner = { path = "crates/route-planner" }
 eframe = { version = "0.29", optional = true }
 egui = { version = "0.29", optional = true }
 egui_extras = { version = "0.29", optional = true }

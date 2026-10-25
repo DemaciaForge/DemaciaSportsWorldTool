@@ -89,22 +89,13 @@ pub struct Config {
     /// 详情页路线颜色模式，缺省为全绿色。
     #[serde(default)]
     pub track_color_mode: TrackColorMode,
-    #[serde(default = "default_ai_minutes")]
-    pub ai_minutes: i64,
-    #[serde(default = "default_ai_reps")]
-    pub ai_reps: i64,
+
     /// 启动时检查更新：silent（静默，发现新版才弹窗）/ ask（每次询问）/ off
     #[serde(default = "default_update_check")]
     pub update_check: String,
-    /// OSM 路网文件路径（真实道路路由用）。
-    #[serde(default)]
-    pub osm_path: String,
-    /// 路线算法：legacy | road | custom。
+    /// 路线算法：legacy | custom。
     #[serde(default = "default_route_mode")]
     pub route_mode: String,
-    /// 真实道路模式随机选中的普通打卡点数量（运行时可变）。
-    #[serde(default = "default_ordinary_pick")]
-    pub ordinary_pick: usize,
     /// Optional standard athletics-track preset; Auto preserves the legacy route.
     #[serde(default)]
     pub track_spec: TrackSpec,
@@ -133,10 +124,6 @@ fn default_route_mode() -> String {
     "legacy".into()
 }
 
-fn default_ordinary_pick() -> usize {
-    crate::track::generate_road::DEFAULT_ORDINARY_PICK
-}
-
 fn default_f32() -> f32 {
     1.0
 }
@@ -146,12 +133,7 @@ fn default_pace_min() -> f32 {
 fn default_pace_max() -> f32 {
     480.0
 }
-fn default_ai_minutes() -> i64 {
-    1
-}
-fn default_ai_reps() -> i64 {
-    5
-}
+
 fn default_update_check() -> String {
     "silent".into()
 }
@@ -170,12 +152,8 @@ impl Default for Config {
             manual_altitude: None,
             manual_altitude_range: None,
             track_color_mode: TrackColorMode::default(),
-            ai_minutes: default_ai_minutes(),
-            ai_reps: default_ai_reps(),
             update_check: default_update_check(),
-            osm_path: String::new(),
             route_mode: default_route_mode(),
-            ordinary_pick: default_ordinary_pick(),
             track_spec: TrackSpec::default(),
             amap_key: String::new(),
             custom_origin: String::new(),
@@ -272,15 +250,6 @@ pub fn identity_with_device_info(
 
 pub fn save_identity(id: &HeaderIdentity) -> Result<(), String> {
     write_json("identity.json", id)
-}
-
-/// AI 项目列表永久缓存：拉取成功即落盘，网络异常时兜底展示。
-pub fn load_ai_sports() -> Option<Vec<crate::api::ai::AiSport>> {
-    read_json("ai_sports.json")
-}
-
-pub fn save_ai_sports(list: &[crate::api::ai::AiSport]) -> Result<(), String> {
-    write_json("ai_sports.json", &list.to_vec())
 }
 
 pub fn load_session() -> Session {
@@ -600,18 +569,4 @@ mod points_cache_tests {
             0.0001
         ));
     }
-}
-
-/// 围栏缓存：拉取成功后落盘，UI 预览无网时兜底。
-pub fn load_fence_cache() -> Option<Vec<Vec<(f64, f64)>>> {
-    let v: serde_json::Value = read_json("fence_cache.json")?;
-    serde_json::from_value(v.get("fences")?.clone()).ok()
-}
-
-pub fn save_fence_cache(fences: &[Vec<(f64, f64)>]) -> Result<(), String> {
-    let doc = serde_json::json!({
-        "ts": crate::crypto::envelope::now_ms(),
-        "fences": fences,
-    });
-    write_json("fence_cache.json", &doc)
 }

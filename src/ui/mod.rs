@@ -8,7 +8,6 @@
 //! __SEMESTER__ / __CHEAT__ / __RANK__ / __USER__ / __AI_RECORDS__
 
 pub mod about;
-pub mod ai;
 pub mod data;
 pub mod device;
 pub mod fonts;
@@ -17,7 +16,6 @@ pub mod log;
 pub mod map;
 pub mod mobile;
 pub mod msgs;
-pub mod osm;
 pub mod records;
 pub mod run;
 pub mod theme;
@@ -26,20 +24,15 @@ pub mod user;
 use crate::api::model::{self, Config, HeaderIdentity, Session};
 use eframe::egui;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
 
 pub const IP: &str = "__IP_DONE__";
 pub const LOGIN_DONE: &str = "__LOGIN_DONE__";
 pub const RUN_DONE: &str = "__RUN_DONE__";
-pub const AI_DONE: &str = "__AI_DONE__";
 pub const RECORDS: &str = "__RECORDS__";
-pub const AI_LIST: &str = "__AI_LIST__";
-pub const AI_DETAIL: &str = "__AI_DETAIL__";
 pub const SEMESTER: &str = "__SEMESTER__";
 pub const CHEAT: &str = "__CHEAT__";
 pub const RANK: &str = "__RANK__";
 pub const USER: &str = "__USER__";
-pub const AI_RECORDS: &str = "__AI_RECORDS__";
 pub const RUN_DETAIL: &str = "__RUN_DETAIL__";
 pub const UPDATE_CHK: &str = "__UPDATE_CHK__";
 pub const UPDATE_PROG: &str = "__UPDATE_PROG__";
@@ -72,28 +65,19 @@ pub struct App {
     pub remember: bool,
     pub login_busy: bool,
     pub run_busy: bool,
-    pub ai_busy: bool,
     pub records_busy: bool,
     pub data_busy: bool,
     pub user_busy: bool,
     pub status: String,
     pub popup: Option<PopupInfo>,
-    pub ai_confirm: Option<ai::AiBatchPlan>,
 
     pub tab: usize,
     pub run_page: run::RunPage,
-    pub ai_page: ai::AiPage,
     pub records_page: records::RecordsPage,
     pub data_page: data::DataPage,
     pub user_page: user::UserPage,
     pub device_page: device::DevicePage,
     pub update: about::UpdateUi,
-
-    /// 已加载的 OSM 路网（真实道路路由 + 地图显示共用）。
-    pub network: Option<Arc<route_planner::RoadGraph>>,
-    pub osm_page: osm::OsmPage,
-    net_tx: Sender<Result<Arc<route_planner::RoadGraph>, String>>,
-    net_rx: Receiver<Result<Arc<route_planner::RoadGraph>, String>>,
 }
 
 impl eframe::App for App {
@@ -110,7 +94,7 @@ impl eframe::App for App {
         self.poll_messages();
         #[cfg(target_os = "android")]
         self.poll_device_info();
-        crate::platform::set_keep_screen_on(self.run_busy || self.ai_busy || self.login_busy);
+        crate::platform::set_keep_screen_on(self.run_busy || self.login_busy);
         ctx.request_repaint_after(std::time::Duration::from_millis(200));
 
         // ── 顶栏 ────────────────────────────────────────────────
@@ -270,13 +254,11 @@ impl eframe::App for App {
             ui.separator();
             match self.tab {
                 0 => self.draw_run(ui),
-                1 => self.draw_ai(ui),
-                2 => self.draw_records(ui),
-                3 => self.draw_data(ui),
-                4 => self.draw_user(ui),
-                5 => self.draw_device(ui),
-                6 => self.log.render(ui),
-                7 => self.draw_osm_page(ui),
+                1 => self.draw_records(ui),
+                2 => self.draw_data(ui),
+                3 => self.draw_user(ui),
+                4 => self.draw_device(ui),
+                5 => self.log.render(ui),
                 _ => self.draw_about(ui),
             }
         });
@@ -312,7 +294,6 @@ impl eframe::App for App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
-        let (net_tx, net_rx) = std::sync::mpsc::channel();
         let font_loaded = fonts::install(&cc.egui_ctx);
         theme::apply(&cc.egui_ctx);
         let identity = model::load_identity();
@@ -338,13 +319,11 @@ impl App {
             remember,
             login_busy: false,
             run_busy: false,
-            ai_busy: false,
             records_busy: false,
             data_busy: false,
             user_busy: false,
             status: "就绪".into(),
             popup: None,
-            ai_confirm: None,
             tab: 0,
             run_page: run::RunPage {
                 dist_min: config.dist_min,
@@ -358,8 +337,7 @@ impl App {
                     .unwrap_or_default(),
                 face_check: config.face_check,
                 plan: None,
-                route_mode: crate::track::generate_road::RouteMode::from_str(&config.route_mode),
-                ordinary_pick: config.ordinary_pick as i64,
+                route_mode: crate::track::RouteMode::from_str(&config.route_mode),
                 track_spec: config.track_spec,
                 custom_track_length: match config.track_spec {
                     crate::track::stadium::TrackSpec::Custom { total_m } => total_m.to_string(),
@@ -367,7 +345,6 @@ impl App {
                 },
                 track_color_mode: config.track_color_mode,
                 map: map::MapState::default(),
-                preview: None,
                 preview_stale: true,
                 map_fitted: false,
                 custom_origin: config.custom_origin.clone(),
@@ -378,23 +355,12 @@ impl App {
                 custom_preview: None,
                 custom_status: String::new(),
             },
-            ai_page: ai::AiPage {
-                days: 1,
-                per_day: 1,
-                ..Default::default()
-            },
+
             records_page: records::RecordsPage::default(),
             data_page: data::DataPage::default(),
             user_page: user::UserPage::default(),
             device_page: device::DevicePage::default(),
             update: about::UpdateUi::default(),
-            network: None,
-            osm_page: osm::OsmPage {
-                path: config.osm_path.clone(),
-                ..Default::default()
-            },
-            net_tx,
-            net_rx,
         };
         if app.font_loaded.is_none() {
             app.log
@@ -411,21 +377,13 @@ impl App {
         app.fetch_ip();
         #[cfg(target_os = "android")]
         crate::android::request_device_info(true);
-        // AI 项目列表先上缓存，网络刷新后覆盖
-        app.ai_page.list = crate::api::model::load_ai_sports().unwrap_or_default();
         if app.session.is_some() {
             app.refresh_data_page();
             app.refresh_records();
             app.refresh_user_page();
-            app.refresh_ai_list();
-            app.refresh_fence();
             app.refresh_points();
         }
-        // 已配置 OSM 路网则启动时后台加载
-        if !app.config.osm_path.is_empty() {
-            let path = app.config.osm_path.clone();
-            app.load_osm_async(path);
-        }
+
         app
     }
 

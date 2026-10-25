@@ -1,4 +1,4 @@
-﻿//! 自然轨迹生成器。
+//! 自然轨迹生成器。
 //!
 //! 四种几何入口（打卡点拟合环 / 标准跑道 / 真实道路 / 自定义路线）共用同一个组装器
 //! [`assemble`]：先由各入口给出「沿场地路线的前进量」，再由 [`assemble`] 把前进量换算
@@ -16,25 +16,18 @@
 //! 进场段、终点另有离场段。真实性的机器读数由 `track::realism::audit` 给出。
 #![allow(non_snake_case)]
 
-use super::geom::{fmt_gain_time, make_point_ring, round_to, wgs84_to_bd09, Rng};
+use super::biomech::{fatigue_from_km, gait, ou_cadence_series};
+use super::geom::{fmt_gain_time, make_point_ring, round_to, Rng};
 use super::model::{GenPoint, Segment, TenWindow, Track};
 use super::postfix::apply_post_fixes;
 use super::realism::{fit_speeds_capped, sample_grid};
-use super::shape::{site_ring, site_ring_with_fences, ShapeTracker, ShapedPlan, SiteRing};
+use super::shape::{site_ring_with_fences, ShapeTracker, ShapedPlan, SiteRing};
 use super::stadium::TrackSpec;
 use crate::api::model::TrackColorMode;
-use route_planner::{fatigue_from_km, gait, ou_cadence_series};
 
 /// 有效配速窗口（判定规则 2'21"-10'00"/km ≈ 1.667-7.092 m/s），硬边界留余量。
 pub const SPEED_FLOOR: f64 = 1.90;
 pub const SPEED_CEIL: f64 = 6.30;
-pub const MAX_EXCEPTION_GPS_SPEED_KMH: f64 = 6.0;
-/// Maximum coordinate drift for a protocol exception point.
-///
-/// These points may still carry their original type marker, but they must not
-/// create a map-scale jump that the server interprets as an invalid route.
-pub const MAX_EXCEPTION_DRIFT_M: f64 = 6.0;
-
 /// 速度字段的测量噪声（相对标准差）。
 ///
 /// 真机 `speed` 是定位芯片给的瞬时速度，与「本段位移/时间差」的比值实测落在
@@ -152,7 +145,16 @@ pub fn build(
     )
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // 仅供测试断言使用
+pub const MAX_EXCEPTION_GPS_SPEED_KMH: f64 = 6.0;
+/// Maximum coordinate drift for a protocol exception point.
+///
+/// These points may still carry their original type marker, but they must not
+/// create a map-scale jump that the server interprets as an invalid route.
+#[cfg_attr(not(test), allow(dead_code))] // 仅供测试断言使用
+pub const MAX_EXCEPTION_DRIFT_M: f64 = 6.0;
 /// Generate a route along a selected standard athletics track.
+#[cfg_attr(not(test), allow(dead_code))] // 仅供测试使用
 pub fn build_stadium(
     dist: f64,
     dur: i64,
@@ -325,6 +327,7 @@ pub(crate) struct Assembly<'a> {
     /// 需要吸附的打卡点（BD）。
     pub snap_points_bd: &'a [(f64, f64)],
     /// 吸附半径（米）。
+    #[allow(dead_code)] // 装配参数留档：当前吸附半径由常量 SNAP_RADIUS_M 给出
     pub snap_radius_m: f64,
     /// true = 起点固定在场路线原点（自定义路线 / 跑道语义）。
     pub start_at_ring_origin: bool,
@@ -883,27 +886,6 @@ fn snap_points_with_cost(locs: &mut [GenPoint], points: &[(f64, f64)], radius_m:
     snapped
 }
 
-/// 坐标被改写后重算逐点累计距离（保留累计时间与步数）。
-///
-/// 起点哨兵（索引 1）与首点同址，累计距离按协议语义固定为 0。
-fn recompute_geometry_cumulative(locs: &mut [GenPoint]) {
-    use super::geom::{MET_PER_DEG_LAT, MET_PER_DEG_LNG};
-    if locs.len() > 2 && (locs[0].gLat - locs[1].gLat).abs() >= 1e-9 {
-        // 首点与哨兵统一（哨兵只是零值标记）
-        locs[0].gLat = locs[1].gLat;
-        locs[0].gLng = locs[1].gLng;
-    }
-    let mut acc = 0.0f64;
-    for i in 1..locs.len() {
-        let d = ((locs[i].gLat - locs[i - 1].gLat) * MET_PER_DEG_LAT)
-            .hypot((locs[i].gLng - locs[i - 1].gLng) * MET_PER_DEG_LNG);
-        acc += d;
-        let val = if i <= 1 { 0.0 } else { acc };
-        locs[i].totalDis = round_to(val, 4);
-        locs[i].validDis = round_to(val, 4);
-    }
-}
-
 /// 收尾：把顶层总计与逐点累计对齐，并重建 10s 窗 / 60s 段。
 ///
 /// 生成器与 `postfix` 会分别改写坐标、时间与步数；这里做一次统一收口，保证
@@ -996,11 +978,6 @@ fn rebuild_segments(track: &Track) -> Vec<Segment> {
         }
     }
     out
-}
-
-/// 把 WGS84 坐标转成 BD-09（真实道路入口用）。
-pub(crate) fn align_wgs84(lat: f64, lng: f64) -> (f64, f64) {
-    wgs84_to_bd09(lat, lng)
 }
 
 #[cfg(test)]

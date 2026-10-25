@@ -26,11 +26,13 @@ pub struct ShapedPlan {
     /// 沿场地路线前进的位移（米）。
     pub loop_m: f64,
     /// 场地路线周长（米）。
+    #[cfg_attr(not(test), allow(dead_code))] // 几何留档：单圈长度
     pub ring_m: f64,
 }
 
 impl ShapedPlan {
     /// 按目标距离与场地周长拆分三段。
+    #[cfg_attr(not(test), allow(dead_code))] // 测试构造用
     pub fn new(dist_m: f64, dur_s: f64, ring_m: f64, rng: &mut Rng) -> Self {
         Self::with_access(dist_m, dur_s, ring_m, rng, true)
     }
@@ -66,11 +68,13 @@ impl ShapedPlan {
     }
 
     /// 是否为"只跑环线、不带进出段"的退化形态（距离太短时）。
+    #[cfg_attr(not(test), allow(dead_code))] // 测试断言用
     pub fn is_pure_loop(&self) -> bool {
         self.entry_m < 1.0 && self.exit_m < 1.0
     }
 
     /// 把进场/离场段清零（自定义路线语义：起点就是用户填的路线起点）。
+    #[cfg_attr(not(test), allow(dead_code))] // 测试构造用
     pub fn without_access(&self) -> Self {
         Self {
             travel: self.travel.without_access(),
@@ -182,6 +186,7 @@ impl ShapeTracker {
     }
 
     /// 复制一份独立状态（用于预估路径长度，不影响原追踪器）。
+    #[cfg_attr(not(test), allow(dead_code))] // 探针克隆
     pub fn clone_for_probe(&self) -> Self {
         Self {
             plan: self.plan.clone(),
@@ -196,6 +201,7 @@ impl ShapeTracker {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))] // 按需读取计划
     pub fn plan(&self) -> &ShapedPlan {
         &self.plan
     }
@@ -209,6 +215,7 @@ impl ShapeTracker {
     ///
     /// 用于把绕行写成连续位移：偏移量乘以「本步位移 / 本步时长」，因此不会在
     /// 一帧之内跳到几秒之后的位置。
+    #[cfg_attr(not(test), allow(dead_code))] // 按需取点
     pub fn next_point(&self) -> (f64, f64) {
         let bonus = self.last_speed_mps.max(0.5) * 2.0;
         let approx = self.s + self.direction * bonus;
@@ -320,6 +327,7 @@ impl ShapeTracker {
 ///
 /// 三档优先级：显式跑道预设 → 打卡点拟合环 → 打卡点质心处的标准 400 m 跑道。
 /// 最后一项是"没有 OSM、没有跑道信息"时的兜底：校园里最可能跑的地方就是操场。
+#[cfg_attr(not(test), allow(dead_code))] // 无围栏时的兜底场地环，测试在用
 pub fn site_ring(points_bd: &[(f64, f64)], spec: TrackSpec) -> Result<SiteRing, String> {
     site_ring_with_fences(points_bd, spec, &[])
 }
@@ -397,6 +405,7 @@ pub struct SiteRing {
     pub center: (f64, f64),
     pub ring_m: f64,
     /// true = 路线来自真实打卡点几何；false = 兜底标准跑道。
+    #[cfg_attr(not(test), allow(dead_code))] // 计划留档：是否真实场地
     pub genuine: bool,
 }
 

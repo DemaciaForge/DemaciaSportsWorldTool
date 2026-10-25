@@ -1,7 +1,6 @@
 //! CLI 子命令实现。
 
 use super::{fmt_hms, get, jstr, logger, make_client, now_ms, parse_flags, parse_pace, print_rows};
-use crate::api::ai::AiMode;
 use crate::api::client::ApiClient;
 use crate::api::model;
 
@@ -14,8 +13,6 @@ pub fn dispatch(args: Vec<String>) -> i32 {
         "run" => cmd_run(&rest),
         "route" => cmd_route(&rest),
         "template" => cmd_template(&rest),
-        "ai" => cmd_ai(&rest),
-        "ai-list" => cmd_ai_list(),
         "records" => cmd_records(),
         "records-raw" => cmd_records_raw(&rest),
         "record-info" => cmd_record_info(&rest),
@@ -23,8 +20,6 @@ pub fn dispatch(args: Vec<String>) -> i32 {
         "obs-sample" => cmd_obs_sample(&rest),
         "obs-real" => cmd_obs_real(&rest),
         "ledger" => cmd_ledger(&rest),
-        "ai-records" => cmd_ai_records(&rest),
-        "ai-info" => cmd_ai_info(&rest),
         "semester" => cmd_semester(),
         "cheat" => cmd_cheat(&rest),
         "rank" => cmd_rank(&rest),
@@ -128,9 +123,7 @@ fn cmd_run(rest: &[&str]) -> i32 {
             return 1;
         }
     };
-    let ordinary_pick: usize = get(&flags, "pick")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(cfg.ordinary_pick);
+
     let custom_spec = match (get(&flags, "origin"), get(&flags, "destination")) {
         (Some(o), Some(d)) => Some(crate::track::custom::CustomRouteSpec {
             origin: o.to_string(),
@@ -147,11 +140,9 @@ fn cmd_run(rest: &[&str]) -> i32 {
         (None, None) => None,
     };
     let route_mode = if custom_spec.is_some() {
-        crate::track::generate_road::RouteMode::Custom
+        crate::track::RouteMode::Custom
     } else {
-        crate::track::generate_road::RouteMode::from_str(
-            get(&flags, "route").unwrap_or(&cfg.route_mode),
-        )
+        crate::track::RouteMode::from_str(get(&flags, "route").unwrap_or(&cfg.route_mode))
     };
     let amap_key = get(&flags, "amap-key")
         .map(|v| v.to_string())
@@ -193,11 +184,40 @@ fn cmd_run(rest: &[&str]) -> i32 {
         track_color_mode,
         seed,
         route_mode,
-        ordinary_pick,
         track_spec: cfg.track_spec,
         custom: custom_spec,
         amap_key,
     };
+    // --dry-run：只生成并自检，不上传、不提交。用来在真实提交前确认轨迹合法。
+    if dry_run {
+        let anchor = match client.identity.anchor_coordinate() {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("× {e}");
+                return 1;
+            }
+        };
+        return match crate::api::flow::run_dry_run(&params, anchor) {
+            Ok(s) => {
+                println!(
+                    "dry-run 通过：{:.0}m / {}s / {} 轨迹点 / {} OBS 键\n  起点 ({:.6}, {:.6})  速度 {:.2}–{:.2} m/s",
+                    s.distance_m,
+                    s.duration_s,
+                    s.track_points,
+                    s.obs_keys,
+                    s.start_latitude,
+                    s.start_longitude,
+                    s.min_speed_mps,
+                    s.max_speed_mps
+                );
+                0
+            }
+            Err(e) => {
+                eprintln!("× dry-run 失败：{e}");
+                1
+            }
+        };
+    }
     match crate::api::flow::run_full_flow(&mut client, &params, &mut log) {
         Ok(out) => {
             println!(
@@ -320,81 +340,6 @@ fn cmd_template(rest: &[&str]) -> i32 {
         }
     }
 }
-
-fn cmd_ai(rest: &[&str]) -> i32 {
-    let flags = parse_flags(rest);
-    let Some(sport) = get(&flags, "sport").and_then(|v| v.parse().ok()) else {
-        eprintln!("缺少 --sport");
-        return 1;
-    };
-    // 按分钟（--minutes 1-30）或按次（--count 5-1000 步长 5）
-    let mode = match get(&flags, "mode").unwrap_or("min") {
-        "count" => {
-            let reps = get(&flags, "score")
-                .or_else(|| get(&flags, "count"))
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(5)
-                .clamp(5, 1000);
-            AiMode::Count {
-                reps: (reps / 5) * 5,
-            }
-        }
-        _ => {
-            let minutes = get(&flags, "score")
-                .or_else(|| get(&flags, "minutes"))
-                .and_then(|v| v.parse::<i64>().ok())
-                .unwrap_or(1)
-                .clamp(1, 30);
-            AiMode::Minutes { minutes }
-        }
-    };
-    let mut client = match make_client() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{e}");
-            return 1;
-        }
-    };
-    let mut log = logger();
-    match crate::api::flow::run_ai_submit(&mut client, sport, mode, &mut log) {
-        Ok(biz) => {
-            println!(
-                "AI 提交成功 服务器={} {}",
-                biz.get("error").and_then(|e| e.as_i64()).unwrap_or(0),
-                biz.get("message").and_then(|m| m.as_str()).unwrap_or("")
-            );
-            0
-        }
-        Err(e) => {
-            eprintln!("AI 提交失败: {e}");
-            1
-        }
-    }
-}
-
-fn cmd_ai_list() -> i32 {
-    let mut client = match make_client() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{e}");
-            return 1;
-        }
-    };
-    let mut log = logger();
-    match crate::api::flow::run_ai_list(&mut client, &mut log) {
-        Ok(list) => {
-            for s in list {
-                println!("id={:<4} {}", s.id, s.name);
-            }
-            0
-        }
-        Err(e) => {
-            eprintln!("拉取失败: {e}");
-            1
-        }
-    }
-}
-
 fn cmd_records() -> i32 {
     let mut client = match make_client() {
         Ok(c) => c,
@@ -801,81 +746,6 @@ fn cmd_record_info(rest: &[&str]) -> i32 {
     }
     0
 }
-
-/// 单条 AI 记录全量详情。
-fn cmd_ai_info(rest: &[&str]) -> i32 {
-    let flags = parse_flags(rest);
-    let Some(id) = get(&flags, "id").and_then(|v| v.parse::<i64>().ok()) else {
-        eprintln!("缺少 --id");
-        return 1;
-    };
-    let mut client = match make_client() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{e}");
-            return 1;
-        }
-    };
-    match crate::api::ai::fetch_record_detail(&mut client, id) {
-        Ok(v) => println!(
-            "{}",
-            crate::textlog::redact_text(&serde_json::to_string_pretty(&v).unwrap_or_default())
-        ),
-        Err(e) => {
-            eprintln!("拉取失败: {e}");
-            return 1;
-        }
-    }
-    0
-}
-
-fn cmd_ai_records(rest: &[&str]) -> i32 {
-    let flags = parse_flags(rest);
-    let Some(sport) = get(&flags, "sport").and_then(|v| v.parse().ok()) else {
-        eprintln!("缺少 --sport");
-        return 1;
-    };
-    let mut client = match make_client() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("{e}");
-            return 1;
-        }
-    };
-    match crate::api::ai::fetch_records(&mut client, sport, 50) {
-        Ok(page) => {
-            use chrono::TimeZone;
-            for g in page.groups {
-                let date = chrono::Local
-                    .timestamp_millis_opt(g.score_date)
-                    .single()
-                    .map(|t| t.format("%Y-%m-%d").to_string())
-                    .unwrap_or_default();
-                println!("{date} ×{}：", g.frequency);
-                for r in g.records {
-                    let grade = if r.rtype == 2 {
-                        format!("{:.1} 秒", r.score.parse::<f64>().unwrap_or(0.0) / 1000.0)
-                    } else {
-                        format!("{} 个", r.score)
-                    };
-                    let finish = chrono::Local
-                        .timestamp_millis_opt(r.score_date)
-                        .single()
-                        .map(|t| t.format("%H:%M:%S").to_string())
-                        .unwrap_or_default();
-                    let video = if r.has_video { "有" } else { "-" };
-                    println!("  {} {} 完成 {finish} 视频 {video}", r.name, grade);
-                }
-            }
-            0
-        }
-        Err(e) => {
-            eprintln!("拉取失败: {e}");
-            1
-        }
-    }
-}
-
 fn cmd_semester() -> i32 {
     let mut client = match make_client() {
         Ok(c) => c,

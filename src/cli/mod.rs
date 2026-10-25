@@ -21,18 +21,14 @@ fn usage() {
   login   --user <手机号> --pass <密码> [--remember]
                                            登录并保存会话；--remember 同时保存凭据供自动重登
   logout                                   登出并清理本地会话
-  run    [--dry-run] [--dist km] [--pace 秒/km] [--lat 纬度 --lon 经度] [--altitude 米或min-max] [--track-color full-green|half-green-gray] [--face 0|1] [--seed n] [--route legacy|road] [--pick n]
+  run    [--dry-run] [--dist km] [--pace 秒/km] [--lat 纬度 --lon 经度] [--altitude 米或min-max] [--track-color full-green|half-green-gray] [--face 0|1] [--seed n] [--route legacy|custom]
                                            跑步全链：策略-点位-轨迹-提交-OBS-验证；--dry-run 仅本地构造并校验，不登录、不联网、不上传；--track-color 选择全绿色或灰绿混合
         [--origin 起点 --destination 终点] [--loop] [--laps n] [--amap-key KEY]
                                            自定义路线：高德步行路径生成轨迹；--loop 绕圈（去程+返程闭环），--laps 固定圈数（0=按距离自动）
   route  --origin <地址或lng,lat> --destination <同> [--loop] [--laps n] [--amap-key KEY] [--out file.gpx]
                                            自定义路线预览：只调高德，不登录不上传；可导出 GPX
   template --file <GPX/JSON>                本地读取真实记录，分析海拔（不会上传）
-  ai-list                                  AI 运动项目列表
-  ai     --sport <id> [--mode min|count] [--score n]
-                                           AI 运动：min 按分钟 1-30；count 按次 5-1000 步长 5
   records                                  跑步记录列表
-  ai-records --sport <id>                  AI 运动记录（按天分组）
   semester                                 学期完成度
   cheat  [--page n]                        违规自查
   rank   main   --type 1|2|3 --sort 1|2 [--gender 0|1] [--date YYYY-MM-DD]

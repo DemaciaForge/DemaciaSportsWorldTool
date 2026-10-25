@@ -6,8 +6,8 @@
 
 use super::map::MapState;
 use super::{mobile, theme, App};
-use crate::track::generate_road::RouteMode;
-use chrono::{Local, TimeZone};
+use crate::track::RouteMode;
+use chrono::TimeZone;
 use eframe::egui;
 
 #[derive(Default)]
@@ -23,8 +23,7 @@ pub struct RunPage {
     pub plan: Option<RunPlan>,
     /// 路线算法模式
     pub route_mode: RouteMode,
-    /// 真实道路模式随机选中的普通打卡点数量（运行时可调）
-    pub ordinary_pick: i64,
+
     /// Standard athletics-track preset; Auto preserves the selected route mode.
     pub track_spec: crate::track::stadium::TrackSpec,
     /// Custom oval measurement-line length, kept as text while editing.
@@ -33,8 +32,7 @@ pub struct RunPage {
     pub track_color_mode: crate::api::model::TrackColorMode,
     /// 地图视图状态
     pub map: MapState,
-    /// 路网预览（真实道路路由）
-    pub preview: Option<crate::track::generate_road::RoadPlan>,
+
     /// 预览是否过期（参数变更后置真）
     pub preview_stale: bool,
     /// 地图视野是否已适配
@@ -155,7 +153,6 @@ impl App {
     }
 
     fn draw_run_content(&mut self, ui: &mut egui::Ui) {
-        let prev_route = self.run_page.route_mode;
         let mut custom_fetch_wanted = false;
         {
             let page = &mut self.run_page;
@@ -241,30 +238,8 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label("路线算法：");
                 ui.selectable_value(&mut page.route_mode, RouteMode::Legacy, "经典打卡点环");
-                ui.selectable_value(&mut page.route_mode, RouteMode::Road, "真实道路路由");
                 ui.selectable_value(&mut page.route_mode, RouteMode::Custom, "自定义路线");
-                if page.route_mode == RouteMode::Road && self.network.is_none() {
-                    ui.colored_label(theme::warn(), "（需先在「路网」页导入 OSM）");
-                }
             });
-            if page.route_mode == RouteMode::Road {
-                ui.horizontal(|ui| {
-                    ui.label("随机普通点：");
-                    let before = page.ordinary_pick;
-                    mobile::drag_i64(
-                        ui,
-                        "run_ordinary_pick",
-                        &mut page.ordinary_pick,
-                        0..=10,
-                        1.0,
-                        "",
-                        " 个",
-                    );
-                    if page.ordinary_pick != before {
-                        page.preview_stale = true;
-                    }
-                });
-            }
             if page.route_mode == RouteMode::Custom {
                 mobile::row(ui, |ui| {
                     ui.label("高德 Key：");
@@ -391,9 +366,9 @@ impl App {
             self.refresh_custom_route();
         }
 
-        // 切换到真实道路路由时按需拉取电子围栏与实时点位（经典模式不触发这些端点）。
-        if self.run_page.route_mode == RouteMode::Road && prev_route != RouteMode::Road {
-            self.refresh_fence();
+        // 进入跑步页即拉一次围栏与点位：围栏用于把跑道直道摆正到场地长边方向，
+        // 点位用于拟合打卡点环与预览。
+        if self.run_page.route_mode != RouteMode::Custom {
             self.refresh_points();
         }
 
@@ -432,7 +407,6 @@ impl App {
             }
         });
 
-        self.draw_run_map(ui);
         self.draw_custom_map(ui);
 
         ui.add_space(8.0);
@@ -459,198 +433,6 @@ impl App {
         let _ = ui;
     }
 
-    fn draw_run_map(&mut self, ui: &mut egui::Ui) {
-        if self.run_page.route_mode != RouteMode::Road {
-            return;
-        }
-        let Some(net) = self.network.clone() else {
-            ui.colored_label(
-                theme::warn(),
-                "未加载 OSM 路网，无法预览（请先到「路网」页导入）",
-            );
-            return;
-        };
-        let Some(plan) = self.run_page.plan.clone() else {
-            return;
-        };
-
-        if self.run_page.preview_stale {
-            self.run_page.preview = None;
-            self.run_page.map_fitted = false;
-            self.run_page.preview_stale = false;
-            // 点位缓存按锚点隔离（main 的串城市防护）；锚点无效时视为无缓存
-            let cached = self
-                .identity
-                .anchor_coordinate()
-                .ok()
-                .and_then(crate::api::model::load_points_cache_for);
-            if let Some((_ts, pts)) = cached {
-                let fixed = crate::api::points::points_fixed(&pts);
-                let ordinary = crate::api::points::points_free(&pts);
-                if !fixed.is_empty() || !ordinary.is_empty() {
-                    let fences = crate::api::model::load_fence_cache().unwrap_or_default();
-                    match crate::track::generate_road::plan_road_view(
-                        &net,
-                        &fixed,
-                        &ordinary,
-                        plan.dist * 1000.0,
-                        plan.seed,
-                        &fences,
-                        self.run_page.ordinary_pick.max(0) as usize,
-                    ) {
-                        Ok(p) => self.run_page.preview = Some(p),
-                        Err(e) => self.status = format!("路线预览失败：{e}"),
-                    }
-                } else {
-                    self.status = "无打卡点缓存，提交后可回显轨迹".into();
-                }
-            } else {
-                self.status = "无打卡点缓存，提交后可回显轨迹".into();
-            }
-        }
-
-        if self.run_page.preview.is_some() {
-            super::map::legend(
-                ui,
-                &[
-                    ("道路", egui::Color32::from_rgb(200, 208, 204)),
-                    ("建筑", egui::Color32::from_rgb(224, 194, 170)),
-                    ("路线", egui::Color32::from_rgb(30, 111, 216)),
-                    ("打卡点", egui::Color32::from_rgb(240, 180, 0)),
-                    ("电子围栏", egui::Color32::from_rgb(34, 197, 94)),
-                    ("起点", egui::Color32::from_rgb(22, 160, 90)),
-                    ("终点", egui::Color32::from_rgb(220, 38, 38)),
-                ],
-            );
-        }
-
-        ui.add_space(4.0);
-        let rect = ui.available_rect_before_wrap();
-        let (response, painter) = ui.allocate_painter(
-            egui::Vec2::new(rect.width().max(200.0), 240.0),
-            egui::Sense::drag(),
-        );
-        let canvas = response.rect;
-        painter.rect_filled(
-            canvas,
-            egui::Rounding::ZERO,
-            egui::Color32::from_rgb(250, 252, 251),
-        );
-
-        // 首次预览后适配视野：优先以电子围栏为中点/范围，无围栏时退化为路线+打卡点+道路
-        if !self.run_page.map_fitted {
-            let mut bounds: Vec<(f64, f64)> = Vec::new();
-            if let Some(p) = &self.run_page.preview {
-                for f in &p.fences {
-                    bounds.extend(f.iter().copied());
-                }
-                if bounds.is_empty() {
-                    bounds = super::map::collect_bounds(&p.edges);
-                    bounds.extend(p.route.iter().copied());
-                    bounds.extend(p.checkpoints.iter().copied());
-                }
-            }
-            if !bounds.is_empty() {
-                self.run_page.map.fit(canvas, &bounds);
-                self.run_page.map_fitted = true;
-            }
-        }
-
-        if let Some(p) = &self.run_page.preview {
-            let road = egui::Color32::from_rgb(200, 208, 204);
-            for e in &p.edges {
-                self.run_page
-                    .map
-                    .draw_polyline(&painter, canvas, e, road, 1.0);
-            }
-            let bld = egui::Color32::from_rgb(224, 194, 170);
-            for b in &p.buildings {
-                self.run_page
-                    .map
-                    .draw_polygon(&painter, canvas, b, bld, 1.0);
-            }
-            let fence_c = egui::Color32::from_rgb(34, 197, 94);
-            for f in &p.fences {
-                self.run_page
-                    .map
-                    .draw_polygon(&painter, canvas, f, fence_c, 2.0);
-            }
-            let route_c = egui::Color32::from_rgb(30, 111, 216);
-            self.run_page
-                .map
-                .draw_polyline(&painter, canvas, &p.route, route_c, 2.5);
-            let cp = egui::Color32::from_rgb(240, 180, 0);
-            for &(la, lo) in &p.checkpoints {
-                self.run_page
-                    .map
-                    .draw_point(&painter, canvas, la, lo, cp, 3.5);
-            }
-            if let Some(first) = p.route.first() {
-                self.run_page.map.draw_point(
-                    &painter,
-                    canvas,
-                    first.0,
-                    first.1,
-                    egui::Color32::from_rgb(22, 160, 90),
-                    4.5,
-                );
-            }
-            if let Some(last) = p.route.last() {
-                self.run_page.map.draw_point(
-                    &painter,
-                    canvas,
-                    last.0,
-                    last.1,
-                    egui::Color32::from_rgb(220, 38, 38),
-                    4.5,
-                );
-            }
-            let label = if p.length_m > 0.0 {
-                let loops = plan.dist * 1000.0 / p.length_m;
-                if loops > 1.15 {
-                    format!(
-                        "本次方案 {:.2} km · 单圈 {:.0} m × {:.1} 圈 · {} 打卡点",
-                        plan.dist,
-                        p.length_m,
-                        loops,
-                        p.checkpoints.len()
-                    )
-                } else {
-                    format!(
-                        "本次方案 {:.2} km · 路线 {:.0} m · {} 打卡点",
-                        plan.dist,
-                        p.length_m,
-                        p.checkpoints.len()
-                    )
-                }
-            } else {
-                format!(
-                    "本次方案 {:.2} km · {} 打卡点",
-                    plan.dist,
-                    p.checkpoints.len()
-                )
-            };
-            painter.text(
-                egui::Pos2::new(canvas.left() + 8.0, canvas.top() + 8.0),
-                egui::Align2::LEFT_TOP,
-                label,
-                egui::FontId::proportional(12.0),
-                egui::Color32::from_rgb(88, 104, 99),
-            );
-        } else {
-            painter.text(
-                canvas.center(),
-                egui::Align2::CENTER_CENTER,
-                "（无预览）",
-                egui::FontId::proportional(14.0),
-                egui::Color32::from_rgb(150, 160, 156),
-            );
-        }
-
-        self.run_page.map.interact(ui, canvas);
-    }
-
-    /// 自定义路线预览：绘制高德闭环路线与打卡点（无 OSM 路网底图）。
     fn draw_custom_map(&mut self, ui: &mut egui::Ui) {
         if self.run_page.route_mode != RouteMode::Custom {
             return;
@@ -814,7 +596,6 @@ impl App {
         let start_ms = plan.start_ms;
         let face_check = if page.face_check { 1 } else { 0 };
         let route_mode = page.route_mode;
-        let ordinary_pick = page.ordinary_pick.max(0) as usize;
         let track_spec = match page.track_spec {
             crate::track::stadium::TrackSpec::Custom { .. } => {
                 let Some(total_m) = page
@@ -853,9 +634,7 @@ impl App {
         self.config.face_check = page.face_check;
         self.config.manual_altitude = manual_altitude;
         self.config.manual_altitude_range = manual_altitude_range;
-        self.config.ordinary_pick = ordinary_pick;
         self.config.route_mode = match route_mode {
-            RouteMode::Road => "road".into(),
             RouteMode::Custom => "custom".into(),
             RouteMode::Legacy => "legacy".into(),
         };
@@ -892,7 +671,6 @@ impl App {
                 track_color_mode,
                 seed,
                 route_mode,
-                ordinary_pick,
                 track_spec,
                 custom,
                 amap_key,

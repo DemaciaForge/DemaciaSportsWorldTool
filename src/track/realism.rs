@@ -90,6 +90,7 @@ impl AuthenticityReport {
     }
 
     /// 逐项读数（多行），失败项带 ✗。
+    #[cfg_attr(not(test), allow(dead_code))] // 报告明细，测试断言在用
     pub fn detail(&self) -> String {
         self.checks
             .iter()
@@ -675,6 +676,7 @@ pub struct TravelPlan {
     /// 场地路线首尾相接时，进入/离开段走的是同一条短线（true = 同一侧进出）。
     pub same_side: bool,
     /// 场地路线绕圈数（含零头，由生成器按实际距离换算）。
+    #[cfg_attr(not(test), allow(dead_code))] // 报告留档：绕圈数
     pub laps: f64,
     /// 进入/离开段的横向侧偏方向（+1 / -1），用于让两段不重合。
     pub side: f64,
@@ -710,6 +712,7 @@ impl TravelPlan {
     }
 
     /// 全程是否启用进场/收尾段（距离过短时不加）。
+    #[cfg_attr(not(test), allow(dead_code))] // 测试断言在用
     pub fn uses_access(&self) -> bool {
         self.entry_frac > 1e-4 || self.exit_frac > 1e-4
     }
@@ -821,14 +824,6 @@ pub fn fit_speeds_capped(w: &mut [f64], dts: &[f64], target: f64, floor: f64, ce
         }
     }
     w.iter().zip(dts).map(|(x, dt)| x * dt).sum()
-}
-
-/// 由逐点位移反推瞬时步长与步数增量（严格满足 v = cad/60 × stride）。
-///
-/// 返回每步的 (位移, 秒数, 步数)，步数取整后剩余小数部分进 carry，累计不丢步。
-pub fn stride_step(v_mps: f64, dt_s: f64, fatigue: f64) -> (f64, f64) {
-    let g = route_planner::gait(v_mps, fatigue);
-    (v_mps * dt_s, g.cadence / 60.0 * dt_s)
 }
 
 /// 校验一条 `Track` 是否可作为「真人一次跑步」上报。

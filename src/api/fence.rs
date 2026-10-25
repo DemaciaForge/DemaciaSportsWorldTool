@@ -15,11 +15,6 @@ pub struct GeoFenceResponse {
     pub area: crate::track::wire::RunAreaMeta,
 }
 
-/// 拉取围栏多边形列表（每个围栏一个闭合环，(lat, lon)，BD-09）。
-pub fn fetch_geo_fence(client: &mut ApiClient) -> Result<Vec<Vec<(f64, f64)>>, String> {
-    Ok(fetch_geo_fence_with_area(client)?.polygons)
-}
-
 /// 拉取围栏并保留服务端原始元数据，供 fixed_point_json/OBS 回显绿色边界。
 pub fn fetch_geo_fence_with_area(client: &mut ApiClient) -> Result<GeoFenceResponse, String> {
     let body = json!({ "geoFenceUpdateTime": 0 }).to_string();

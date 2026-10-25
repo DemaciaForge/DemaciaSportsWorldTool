@@ -117,25 +117,6 @@ impl MapState {
         painter.add(egui::Shape::line(ps, Stroke::new(width, color)));
     }
 
-    pub fn draw_polygon(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        pts: &[(f64, f64)],
-        color: Color32,
-        width: f32,
-    ) {
-        if pts.len() < 3 {
-            return;
-        }
-        let mut ps: Vec<Pos2> = pts
-            .iter()
-            .map(|(la, lo)| self.to_screen(rect, *la, *lo))
-            .collect();
-        ps.push(ps[0]);
-        painter.add(egui::Shape::closed_line(ps, Stroke::new(width, color)));
-    }
-
     pub fn draw_point(
         &self,
         painter: &egui::Painter,
@@ -148,17 +129,6 @@ impl MapState {
         let c = self.to_screen(rect, lat, lon);
         painter.circle_filled(c, radius, color);
     }
-}
-
-/// 收集一组折线/环的所有点，用于 fit。
-pub fn collect_bounds(edges: &[Vec<(f64, f64)>]) -> Vec<(f64, f64)> {
-    let mut pts: Vec<(f64, f64)> = Vec::new();
-    for e in edges.iter().take(400) {
-        for p in e {
-            pts.push(*p);
-        }
-    }
-    pts
 }
 
 /// 地图图例：颜色方块 + 说明文字。
