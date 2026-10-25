@@ -535,7 +535,7 @@ pub fn audit(track: &Track) -> AuthenticityReport {
     }
 
     // 10 累计上升
-    let ascent = super::altitude::total_ascent(locs);
+    let ascent = super::altitude::total_ascent_of(track);
     let applicable = track.totalDistance >= ASCENT_READABLE_FROM_M;
     let c = Check::new("total_ascent_m", ascent, "> 0（里程 ≥ 1 km）", ascent > 0.0)
         .with_applicable(applicable);

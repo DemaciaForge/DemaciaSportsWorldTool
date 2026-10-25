@@ -72,6 +72,13 @@ pub struct Track {
     pub speedPerTenSec: Vec<TenWindow>,
     pub stepsPerTenSec: Vec<TenWindow>,
     pub segments: Vec<Segment>,
+    /// 手动海拔覆盖后的爬升量（米）。
+    ///
+    /// `totalAscent` 是 `bdA` 正差分累加，但一旦用户把海拔压成固定值或映射到区间，
+    /// 曲线形状就被改写了：固定海拔时爬升必须归零，区间映射时爬升应等于「最高−最低」
+    /// 而不是重算出来的噪声累加。`Some(..)` 表示用这个值，`None` 表示按曲线计算。
+    #[serde(skip)]
+    pub altitude_gain_override: Option<f64>,
 }
 
 impl Track {
@@ -179,6 +186,7 @@ mod tests {
             speedPerTenSec: vec![],
             stepsPerTenSec: vec![],
             segments: vec![],
+            altitude_gain_override: None,
         }
     }
     #[test]

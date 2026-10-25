@@ -19,6 +19,14 @@ pub fn positive_ascent_delta(delta_m: f64) -> f64 {
     }
 }
 
+/// 爬升量：优先用手动海拔覆盖时记下的值（见 `Track::altitude_gain_override`）。
+pub fn total_ascent_of(track: &Track) -> f64 {
+    match track.altitude_gain_override {
+        Some(v) => round_to(v, 2),
+        None => total_ascent(&track.locations),
+    }
+}
+
 pub fn total_ascent(locs: &[super::model::GenPoint]) -> f64 {
     round_to(
         locs.windows(2)
@@ -89,6 +97,8 @@ pub fn override_bd_a(track: &mut Track, altitude_m: f64) -> Result<(), String> {
         point.bdA = round_to(altitude_m, 2);
         point.hasAltitude = true;
     }
+    // 固定海拔：曲线被压平，爬升必须是 0，不能拿噪声正差分累加成几百米。
+    track.altitude_gain_override = Some(0.0);
     Ok(())
 }
 
@@ -111,13 +121,16 @@ pub fn override_bd_a_range(track: &mut Track, range: AltitudeRange) -> Result<()
         point.bdA = round_to(mapped.clamp(range.min_m, range.max_m), 2);
         point.hasAltitude = true;
     }
+    // 区间映射后曲线被线性缩放，爬升应等于「最高 − 最低」这个总起伏，
+    // 而不是重算那条已经被改写过的曲线（重算会把缩放后的噪声也算进去）。
+    track.altitude_gain_override = Some(target_span);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use super::total_ascent;
     use super::*;
-    use crate::api::submit::total_ascent;
     use crate::track::generator::build;
 
     fn points() -> Vec<(f64, f64)> {
@@ -129,7 +142,7 @@ mod tests {
         let mut track = build(1200.0, 600, 7, (38.9, 121.54), 1_700_000_000_000, &points());
         override_bd_a(&mut track, 36.75).unwrap();
         assert!(track.locations.iter().all(|p| p.bdA == 36.75));
-        assert_eq!(total_ascent(&track.locations), 0.0);
+        assert_eq!(super::total_ascent_of(&track), 0.0);
     }
 
     #[test]

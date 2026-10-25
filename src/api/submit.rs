@@ -10,7 +10,7 @@ use crate::crypto::sign::{original_sign, signature};
 use crate::track::altitude;
 use crate::track::calorie::{avg_power, official_kcal};
 use crate::track::geom::round_to;
-use crate::track::model::{GenPoint, Track};
+use crate::track::model::Track;
 use crate::track::wire::validate_five_point_wrapper;
 use serde_json::{json, Map, Value};
 
@@ -43,11 +43,6 @@ fn android_tensec(track: &Track, start_ms: i64, kind: &str) -> Vec<Value> {
         }
     }
     out
-}
-
-/// bdA 正差分累计。
-pub fn total_ascent(locs: &[GenPoint]) -> f64 {
-    altitude::total_ascent(locs)
 }
 
 pub fn pace_speed_value(total_time_s: i64, distance_m: f64) -> i64 {
@@ -103,7 +98,7 @@ pub fn submit_record(
     let total_steps = track.totalSteps;
     let start_ms = track.startTime;
     let stop_ms = start_ms + total_time * 1000;
-    let ascent = total_ascent(&track.locations);
+    let ascent = altitude::total_ascent_of(track);
     let power = avg_power(p.weight, total_dis, total_time);
     let kcal = official_kcal(p.weight, total_time, total_dis);
 

@@ -724,7 +724,13 @@ fn build_windows(track: &Track, rrid: i64) -> (Vec<Value>, Vec<Value>) {
 fn build_laps(track: &Track, start_ms: i64) -> Vec<Value> {
     let mut laps = Vec::new();
     let locs = &track.locations;
+    // 手动海拔覆盖后，曲线重算出来的爬升没有意义（见 altitude_gain_override）。
+    let gain_override = track.altitude_gain_override;
     let (mut prev_d, mut prev_t, mut prev_steps, mut gain) = (0.0f64, 0i64, 0i64, 0.0f64);
+    let total_gain = match gain_override {
+        Some(v) => v,
+        None => super::altitude::total_ascent(locs),
+    };
     let alt0 = locs.first().map(|p| p.bdA).unwrap_or(0.0);
     for (i, pt) in locs.iter().enumerate() {
         if i > 0 {
@@ -747,7 +753,14 @@ fn build_laps(track: &Track, start_ms: i64) -> Vec<Value> {
                 "cumulativeDuration": t_now,
                 "distance": round_to(lap_d, 4),
                 "duration": lap_t,
-                "elevationGain": round_to(gain, 2),
+                "elevationGain": round_to(
+                    match gain_override {
+                        // 有覆盖值时按里程占比分摊总爬升
+                        Some(_) => total_gain * (d_now / locs.last().map(|p| p.totalDis).unwrap_or(d_now).max(1.0)),
+                        None => gain,
+                    },
+                    2,
+                ),
                 "endAltAbs": round_to(pt.bdA, 2),
                 "endAltRel": round_to(pt.bdA - alt0, 2),
                 "flag": start_ms,
