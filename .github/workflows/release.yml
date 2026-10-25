@@ -87,12 +87,16 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
+          DIST="$(pwd)/dist"
           BIN=target/$TARGET/release/demaciasportsworldtool
           if [ "${{ matrix.os }}" = "windows-latest" ]; then BIN="$BIN.exe"; fi
+          # 发布包统一带上 README 与 LICENSE，便于离线查看用法与署名要求
+          STAGE=$(mktemp -d)
+          cp "$BIN" README.md LICENSE "$STAGE/"
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            7z a "dist/$ARTIFACT.zip" "$BIN"
+            ( cd "$STAGE" && 7z a "$DIST/$ARTIFACT.zip" ./* )
           else
-            tar czf "dist/$ARTIFACT.tar.gz" -C "$(dirname "$BIN")" "$(basename "$BIN")"
+            tar czf "$DIST/$ARTIFACT.tar.gz" -C "$STAGE" .
           fi
 
       - uses: actions/upload-artifact@v4
