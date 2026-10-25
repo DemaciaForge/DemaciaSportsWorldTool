@@ -21,7 +21,7 @@ fn usage() {
   login   --user <手机号> --pass <密码> [--remember]
                                            登录并保存会话；--remember 同时保存凭据供自动重登
   logout                                   登出并清理本地会话
-  run    [--dry-run] [--dist km] [--pace 秒/km] [--lat 纬度 --lon 经度] [--altitude 米或min-max] [--track-color full-green|half-green-gray] [--ago 分钟] [--days-ago 0-3 --time HH:MM] [--face 0|1] [--seed n] [--route legacy|road] [--pick n]
+  run    [--dry-run] [--dist km] [--pace 秒/km] [--lat 纬度 --lon 经度] [--altitude 米或min-max] [--track-color full-green|half-green-gray] [--face 0|1] [--seed n] [--route legacy|road] [--pick n]
                                            跑步全链：策略-点位-轨迹-提交-OBS-验证；--dry-run 仅本地构造并校验，不登录、不联网、不上传；--track-color 选择全绿色或灰绿混合
         [--origin 起点 --destination 终点] [--loop] [--laps n] [--amap-key KEY]
                                            自定义路线：高德步行路径生成轨迹；--loop 绕圈（去程+返程闭环），--laps 固定圈数（0=按距离自动）
@@ -45,7 +45,8 @@ fn usage() {
   ledger [--all] [--hint]                  本地提交台账：每次成功提交的 rrid/uuid/起跑时刻（服务端只留 10 条）
   update [--check]                        检查更新；默认下载并自替换（--check 仅检查）
 
-当天榜单通常在有效里程产生后才有数据；run 默认随机 1.0~1.5 km / 6~8 分配速 / 30-300 分钟前。"#
+当天榜单通常在有效里程产生后才有数据；run 默认随机 1.0~1.5 km / 6~8 分配速。
+起跑时刻恒为「现在 − 用时」（如 14:40 提交 23 分钟 → 记录 14:17–14:40），不提供自定义开始时间。"#
     );
 }
 

@@ -90,12 +90,6 @@ fn cmd_run(rest: &[&str]) -> i32 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.0);
     let pace: f32 = get(&flags, "pace").map(parse_pace).unwrap_or(0.0);
-    let ago_min: i64 = get(&flags, "ago").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let days_ago: i64 = get(&flags, "days-ago")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
-        .clamp(0, 3);
-    let time_spec = get(&flags, "time").unwrap_or("");
     let face = get(&flags, "face")
         .map(|v| v == "1" || v == "true")
         .unwrap_or(true);
@@ -174,28 +168,13 @@ fn cmd_run(rest: &[&str]) -> i32 {
         360.0 + rand::random::<f32>() * 120.0
     };
     let dur = (dist as f32 / 1000.0 * pace_s) as i64;
-    let start_ms = if !time_spec.is_empty() {
-        // --time "HH:MM" 配合 --days-ago（0-3）
-        let (h, m) = time_spec.split_once(':').unwrap_or((time_spec, "0"));
-        let (h, m) = (
-            h.parse::<u32>().unwrap_or(7) % 24,
-            m.parse::<u32>().unwrap_or(0),
-        );
-        let base = chrono::Local::now() - chrono::Duration::days(days_ago);
-        use chrono::{Datelike, TimeZone};
-        chrono::Local
-            .with_ymd_and_hms(base.year(), base.month(), base.day(), h, m, 0)
-            .single()
-            .map(|x| x.timestamp_millis())
-            .unwrap_or(now_ms())
-    } else if ago_min > 0 {
-        now_ms() - ago_min * 60_000
-    } else {
-        now_ms() - 30 * 60_000 - (rand::random::<f64>() * 270.0 * 60_000.0) as i64
-    };
+    // 起跑时刻固定为「现在减去本次用时」：14:40 提交一次 23 分钟的跑步，记录的
+    // 就是 14:17–14:40。不接受把记录排到过去的任意时刻——那是学生自己编的时刻，
+    // 与"刚刚跑完"这一事实不符。
+    let start_ms = now_ms() - dur * 1000;
 
     println!(
-        "参数：{:.0}m / {}s / 配速 {}:{:02}/km / 开始 {}",
+        "参数：{:.0}m / {}s / 配速 {}:{:02}/km / 起跑 {}",
         dist,
         dur,
         pace_s as i64 / 60,

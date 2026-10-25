@@ -407,8 +407,9 @@ pub fn run_full_flow(
         params.dur,
         route_pts.len()
     ));
-    // 随机 0-4 秒偏移（终端上报的 flag 与首点差 <5s），轨迹/提交/OBS/五点统一使用
-    let start_ms = params.start_ms + (rand::random::<i64>() % 5) * 1000;
+    // 起跑时刻由调用方给定，恒等于「现在 − 用时」。这里不再加随机偏移，
+    // 否则终点会落到未来，与「刚跑完就提交」矛盾。
+    let start_ms = params.start_ms;
     let mut track = if params.track_spec != crate::track::stadium::TrackSpec::Auto {
         log(&format!(
             "[track] 使用{}操场模式",
