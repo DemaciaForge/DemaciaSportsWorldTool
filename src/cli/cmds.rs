@@ -72,6 +72,7 @@ fn cmd_logout() -> i32 {
     let identity = model::load_identity();
     let sess = model::load_session();
     let mut client = ApiClient::new(identity, sess.is_logged_in().then_some(sess));
+
     let mut log = logger();
     crate::api::login::logout(&mut client, &mut log);
     0
@@ -80,6 +81,7 @@ fn cmd_logout() -> i32 {
 fn cmd_run(rest: &[&str]) -> i32 {
     let flags = parse_flags(rest);
     let dry_run = get(&flags, "dry-run").is_some();
+    let policy_only = get(&flags, "policy-only").is_some();
     let dist_km: f32 = get(&flags, "dist")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.0);
@@ -110,7 +112,48 @@ fn cmd_run(rest: &[&str]) -> i32 {
     let cfg = model::load_config();
     let identity = model::load_identity();
     let sess = model::load_session();
+    let logged_in = sess.is_logged_in();
     let mut client = ApiClient::new(identity, sess.is_logged_in().then_some(sess));
+
+    // --policy-only：登录后只拉一次策略并打印关键字段，然后退出。
+    // 不生成轨迹、不拉点位、不上传 OBS、不提交记录，用来确认学校当前配置。
+    if policy_only {
+        if !logged_in {
+            eprintln!("× 需要先 login（--policy-only 要读服务端策略）");
+            return 1;
+        }
+        return match crate::api::policy::fetch_policy(&mut client) {
+            Ok(pol) => {
+                println!("策略响应：");
+                println!("  目标距离      {} m", pol.min_distance);
+                println!("  点位模式      {}", pol.sequence_mode());
+                println!("  sequenceRule      {}", pol.sequence_rule);
+                println!("  sequenceStrength  {}", pol.sequence_strength);
+                println!("  有效时长      {} s", pol.valid_time);
+                println!(
+                    "  策略版本      policy={} timestamp={}",
+                    pol.policy, pol.timestamp
+                );
+                println!("  跑步冻结      {} (freezeRunTime)", pol.freeze_run_time);
+                if !pol.message.trim().is_empty() {
+                    println!("  服务端提示    {}", pol.message.trim());
+                }
+                println!("  跑区 ID       {}", pol.area.run_area_id);
+                println!("  必经点位      {} 个", pol.must_points.len());
+                if let Some(secs) = pol.frozen_for_secs() {
+                    println!();
+                    eprintln!("× {}", pol.frozen_message());
+                    let _ = secs;
+                    return 2;
+                }
+                0
+            }
+            Err(e) => {
+                eprintln!("× 拉取策略失败：{e}");
+                1
+            }
+        };
+    }
 
     let parse_opt = |key: &str| -> Result<Option<f64>, String> {
         match get(&flags, key) {

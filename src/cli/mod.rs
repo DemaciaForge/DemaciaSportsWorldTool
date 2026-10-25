@@ -21,8 +21,11 @@ fn usage() {
   login   --user <手机号> --pass <密码> [--remember]
                                            登录并保存会话；--remember 同时保存凭据供自动重登
   logout                                   登出并清理本地会话
-  run    [--dry-run] [--dist km] [--pace 秒/km] [--lat 纬度 --lon 经度] [--altitude 米或min-max] [--face 0|1] [--seed n]
-                                           跑步全链：策略-点位-轨迹-提交-OBS-验证；--dry-run 仅本地构造并校验，不登录、不联网、不上传
+  run    [--dry-run] [--policy-only] [--dist km] [--pace 秒/km] [--lat 纬度 --lon 经度]
+         [--altitude 米或min-max] [--altitude-base 米] [--altitude-osc 米] [--face 0|1] [--seed n]
+                                           跑步全链：策略-点位-轨迹-提交-OBS-验证
+      --dry-run     仅本地构造并校验，不登录、不联网、不上传
+      --policy-only 登录后只拉策略打印配置，不生成轨迹、不上传、不提交
   template --file <GPX/JSON>                本地读取真实记录，分析海拔（不会上传）
   records                                  跑步记录列表
   semester                                 学期完成度
