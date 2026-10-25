@@ -166,7 +166,6 @@ pub fn override_bd_a_range(track: &mut Track, range: AltitudeRange) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::total_ascent;
     use super::*;
     use crate::track::generator::build;
 
