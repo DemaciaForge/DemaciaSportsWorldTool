@@ -174,39 +174,26 @@ pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
     })
 }
 
-/// 提交时保留为「普通点」的点位数量上限。
-///
-/// 规则里有一条「至少通过2个普通点位」（`reasonList` type 3）。原来
-/// [`five_point_payload`] 把所有已通过点都标成 `isFixed=1`，等于告诉服务端
-/// 「普通点 0 个」，那条永远不达标。这里保留至多 2 个**服务端自己标为普通点**
-/// 的非起点点位不改成 1，让普通点计数成立；其余仍按已验证的成功载荷标 1。
-const ORDINARY_POINT_QUOTA: usize = 2;
-
 /// 五点实体（实时点位 → 跑完态 isPass=true）。
+///
+/// 已通过的点**一律标 `isFixed=1`**。真实 App 跑完后的详情页是 5 个绿色打勾
+/// 点位，`isFixed=0` 会显示成橙色——那是「未跑完/普通点」的形态，不是完成态。
+///
+/// 「至少通过 2 个普通点位」（`reasonList` type 3）由服务端按点位自身的固有属性
+/// 与轨迹是否真的经过来判定，不依赖提交时声称的 `isFixed`。曾为凑这条规则把 2 个
+/// 点降成 `isFixed=0`，结果是详情页出现 2 绿 3 橙，与真实跑步形态不符。
 pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
-    // 起点恒为必经点；其余点位按上面的配额保留一部分 `isFixed=0`。
-    let mut ordinary_left = ORDINARY_POINT_QUOTA;
     points
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let server_says_ordinary = p.get("isFixed").and_then(|v| v.as_i64()).unwrap_or(0) == 0;
-            // 只翻「服务端本来就标为普通点」的位置：把必经点说成普通点会与
-            // 服务端自己的判定冲突，比不达标更糟。
-            let keep_ordinary = i > 0 && server_says_ordinary && ordinary_left > 0;
-            if keep_ordinary {
-                ordinary_left -= 1;
-            }
             json!({
                 "flag": start_ms,
                 "glat": p["glat"].as_f64().unwrap_or(0.0),
                 "glon": p["glon"].as_f64().unwrap_or(0.0),
                 "id": i as i64 + 1,
-                // 跑完态的 fivePointJson 要把本次命中的打卡点标为固定点。
-                // 点位接口有时只把起点标成 1（其余返回 0），但已验证的
-                // 成功载荷要求所有已通过点均为 isFixed=1——普通点配额是
-                // 唯一的例外，见 ORDINARY_POINT_QUOTA。
-                "isFixed": if keep_ordinary { 0 } else { 1 },
+                // 跑完态：本次命中的打卡点全部标为固定点（详情页显示绿色打勾）。
+                "isFixed": 1,
                 "isPass": true,
                 "lat": p["lat"].as_f64().unwrap_or(0.0),
                 "lon": p["lon"].as_f64().unwrap_or(0.0),
@@ -218,14 +205,15 @@ pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
         .collect()
 }
 
-/// 统计 [`five_point_payload`] 会把多少个点位保留为普通点（供日志用）。
+/// 统计点位里的普通点（服务端标为 `isFixed=0` 的非起点点位）数量。
+///
+/// 提交载荷会把它们全部改成 1，这个计数只用于日志说明「本次经过了几个普通点」。
 pub fn ordinary_point_count(points: &[Value]) -> usize {
     points
         .iter()
         .enumerate()
         .filter(|(i, p)| *i > 0 && p.get("isFixed").and_then(|v| v.as_i64()).unwrap_or(0) == 0)
         .count()
-        .min(ORDINARY_POINT_QUOTA)
 }
 
 /// 提交 body 的 fivePointJson 包装串。
@@ -468,35 +456,31 @@ mod validation_tests {
             .collect()
     }
 
+    /// 跑完态一律全 1：详情页据此显示 5 个绿色打勾。
+    ///
+    /// `isFixed=0` 在官方详情页显示为橙色，是「未跑完/普通点」的形态。曾为凑
+    /// 「至少通过 2 个普通点位」把 2 个点降成 0，结果出现 2 绿 3 橙，与真实
+    /// 跑完记录不符。
     #[test]
-    fn ordinary_quota_keeps_exactly_two_ordinary_points() {
-        // 服务端把除起点外全部标为 0（真实接口常见情形）
+    fn completed_payload_marks_every_point_fixed() {
         let pts = points_with_flags(&[1, 0, 0, 0, 0]);
-        assert_eq!(payload_flags(&pts), vec![1, 0, 0, 1, 1]);
-        assert_eq!(ordinary_point_count(&pts), 2);
+        assert_eq!(payload_flags(&pts), vec![1, 1, 1, 1, 1]);
+        // 普通点计数仍按服务端原始标记统计，仅用于日志
+        assert_eq!(ordinary_point_count(&pts), 4);
     }
 
     #[test]
-    fn ordinary_quota_never_turns_must_pass_points_into_ordinary() {
-        // 服务端标的全是必经点：一个都不能翻，宁可不达标也不能自相矛盾
+    fn completed_payload_keeps_all_fixed_when_server_says_all_must_pass() {
         let pts = points_with_flags(&[1, 1, 1, 1]);
         assert_eq!(payload_flags(&pts), vec![1, 1, 1, 1]);
         assert_eq!(ordinary_point_count(&pts), 0);
     }
 
     #[test]
-    fn ordinary_quota_takes_what_is_available() {
-        // 只有一个可翻的点
-        let pts = points_with_flags(&[1, 1, 0, 1]);
-        assert_eq!(payload_flags(&pts), vec![1, 1, 0, 1]);
-        assert_eq!(ordinary_point_count(&pts), 1);
-    }
-
-    #[test]
-    fn ordinary_quota_never_flips_the_start_point() {
+    fn completed_payload_fixes_the_start_point_too() {
         // 起点即便服务端标 0 也必须是 1
         let pts = points_with_flags(&[0, 0, 0]);
-        assert_eq!(payload_flags(&pts), vec![1, 0, 0]);
+        assert_eq!(payload_flags(&pts), vec![1, 1, 1]);
     }
 
     #[test]

@@ -332,7 +332,7 @@ pub fn run_full_flow(
     // ③ 轨迹生成：经典打卡点环
     let pts_bd = points::points_bd(&pts);
     log(&format!(
-        "√ [track] 打卡点 {} 个（提交时保留 {} 个普通点，其余标为必经点）",
+        "√ [track] 打卡点 {} 个（其中 {} 个为普通点，提交时全部标为已通过）",
         pts_bd.len(),
         crate::track::wire::ordinary_point_count(&pts)
     ));
