@@ -32,9 +32,8 @@
 name: APK
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
+  # 已停止 APK 发布：只构建 Windows EXE。tag 推送不再触发这里，
+  # 保留 workflow_dispatch 以便需要时手工出一个测试包（只上传 artifact）。
   workflow_dispatch:
 
 permissions:
