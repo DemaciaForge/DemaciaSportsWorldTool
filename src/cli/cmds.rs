@@ -21,6 +21,7 @@ pub fn dispatch(args: Vec<String>) -> i32 {
         "record-info" => cmd_record_info(&rest),
         "obs-get" => cmd_obs_get(&rest),
         "obs-sample" => cmd_obs_sample(&rest),
+        "obs-real" => cmd_obs_real(&rest),
         "ai-records" => cmd_ai_records(&rest),
         "ai-info" => cmd_ai_info(&rest),
         "semester" => cmd_semester(),
@@ -550,6 +551,119 @@ fn decode_gz_fields(v: &serde_json::Value) -> serde_json::Value {
         }
     }
     out
+}
+
+/// 拉取**自己账号下真实记录**的 OBS 对象（不需要 root、不需要抓包）。
+///
+/// 服务器把每条跑步的原始轨迹放在阿里云 OSS 上，key 由 `rrid` / `uuid` / 起跑
+/// 时刻唯一确定（见 `wire::obs_keys`）。所以只要记录列表能拿到这三样，就能用与
+/// 上传时同一套签名把对象读回来——真机记录里 `bdS`/`count`/`dtr` 的真实语义
+/// 就来自这里。
+///
+/// 用法：
+///   `obs-real`                        拉取列表里全部记录
+///   `obs-real --rrid 1320403809`      只拉一条
+///   `obs-real --limit 3 --out-dir x/` 限制条数与输出目录
+fn cmd_obs_real(rest: &[&str]) -> i32 {
+    let flags = parse_flags(rest);
+    let only_rrid = get(&flags, "rrid").and_then(|v| v.parse::<i64>().ok());
+    let limit = get(&flags, "limit")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(usize::MAX);
+    let out_dir = get(&flags, "out-dir").unwrap_or(".").to_string();
+    let mut client = match make_client() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+    let mut log = |s: &str| println!("{}", crate::textlog::clean(s));
+    let rows = match crate::api::records::fetch_records(&mut client) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("记录列表拉取失败: {e}");
+            return 1;
+        }
+    };
+    if rows.is_empty() {
+        eprintln!("账号下没有记录");
+        return 1;
+    }
+    println!("√ 记录列表 {} 条", rows.len());
+    let mut ok = 0;
+    let mut tried = 0;
+    for row in rows.iter() {
+        if let Some(only) = only_rrid {
+            if row.rrid != only {
+                continue;
+            }
+        }
+        if tried >= limit {
+            break;
+        }
+        tried += 1;
+        if row.uuid.is_empty() {
+            println!("⚠ rrid={} 无 uuid，跳过", row.rrid);
+            continue;
+        }
+        // 与 `wire::obs_keys` 同一套推导：小时桶取起跑时刻的本地时间。
+        let t0 = {
+            use chrono::TimeZone;
+            chrono::Local
+                .timestamp_millis_opt(row.start_time)
+                .single()
+                .map(|t| t.format("%Y%m%d%H").to_string())
+                .unwrap_or_default()
+        };
+        let keys = [
+            format!("run_data/{t0}/{}.json", row.uuid),
+            format!("run_data/{}/{}.json", row.rrid / 1_000_000, row.rrid),
+        ];
+        let mut got = false;
+        for key in keys.iter() {
+            match crate::api::obs::fetch_object(&mut client, key, &mut log) {
+                Ok(v) => {
+                    let decoded = decode_gz_fields(&v);
+                    let path =
+                        std::path::Path::new(&out_dir).join(format!("obs_{}.json", row.rrid));
+                    match std::fs::write(
+                        &path,
+                        serde_json::to_string_pretty(&decoded).unwrap_or_default(),
+                    ) {
+                        Ok(()) => {
+                            println!(
+                                "√ rrid={} {}m/{}s 起跑={} → {}",
+                                row.rrid,
+                                row.total_dis.round(),
+                                row.total_time,
+                                t0,
+                                path.display()
+                            );
+                            got = true;
+                            break;
+                        }
+                        Err(e) => println!("⚠ rrid={} 写入失败: {e}", row.rrid),
+                    }
+                }
+                Err(e) => println!("  [obs] {key} → {e}"),
+            }
+        }
+        if got {
+            ok += 1;
+        } else {
+            println!(
+                "⚠ rrid={} 两个 key 都取不到（记录可能被服务端清过 OBS，或 {} 小时桶不对）",
+                row.rrid, t0
+            );
+        }
+    }
+    println!("完成：{ok}/{tried} 条取到");
+    if ok == 0 {
+        1
+    } else {
+        0
+    }
 }
 
 /// 本地生成一份 OBS 对象样本（不提交；结构对照用）。
