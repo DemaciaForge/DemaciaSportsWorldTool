@@ -24,7 +24,8 @@ pub struct RunParams {
     pub dur: i64,
     /// 开始时间（毫秒）。
     pub start_ms: i64,
-    pub face_check: i64,
+    /// 提交体的 `faceCheck`。`None` = 跟随学校策略里的 `faceVerify`。
+    pub face_check: Option<i64>,
     /// 用户手动填写的绝对海拔（米）；None 使用生成器海拔。
     pub manual_altitude: Option<f64>,
     /// 用户手动填写的海拔范围；与单值字段兼容，范围优先。
@@ -479,7 +480,9 @@ pub fn run_full_flow(
         policy_ts: pol.timestamp,
         min_distance: pol.min_distance,
         weight: if sess.weight > 0.0 { sess.weight } else { 68.0 },
-        face_check: params.face_check,
+        face_check: params
+            .face_check
+            .unwrap_or(if pol.face_verify { 1 } else { 0 }),
         five_point_json: five,
         address: client.identity.city.clone(),
     };
@@ -581,7 +584,7 @@ mod tests {
             dist: 2_000.0,
             dur: 800,
             start_ms: 1_700_000_000_000,
-            face_check: 1,
+            face_check: None,
             manual_altitude: None,
             manual_altitude_range: None,
             seed: 7,

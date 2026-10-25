@@ -38,6 +38,11 @@ pub struct PolicyInfo {
     pub sequence_rule: i64,
     /// 顺序强度（`RunRuleModel.sequenceStrength`）。
     pub sequence_strength: i64,
+    /// 学校是否启用人脸抽检（`RunRuleModel.faceVerify`）。
+    ///
+    /// 这个值是**服务端自己下发的**，提交体的 `faceCheck` 必须与之一致：
+    /// 学校没开人脸却上报 `faceCheck=1`，等于声称做过一次根本不存在的校验。
+    pub face_verify: bool,
     /// 服务端可选的校园区域/绿色围栏元数据；没有配置时为自由跑默认值。
     pub area: crate::track::wire::RunAreaMeta,
 }
@@ -120,6 +125,10 @@ pub(crate) fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
             .get("sequenceStrength")
             .and_then(|t| t.as_i64())
             .unwrap_or(0),
+        face_verify: rule
+            .get("faceVerify")
+            .and_then(|t| t.as_bool())
+            .unwrap_or(false),
         must_points: extract_must_points(biz),
         area: super::points::area_from_payload(biz, &[]),
     })
@@ -245,6 +254,20 @@ mod freeze_tests {
     }
 
     /// `freezeRunTime` 也兼容放在 runRuleModel 里的版本。
+    /// faceVerify 决定提交体的 faceCheck，必须按服务端下发的值走。
+    #[test]
+    fn face_verify_is_read_from_run_rule_model() {
+        let mut v = base();
+        // 缺失按 false：不声称做过人脸校验
+        assert!(!parse_policy_response(&v).unwrap().face_verify);
+
+        v["runRuleModel"]["faceVerify"] = json!(true);
+        assert!(parse_policy_response(&v).unwrap().face_verify);
+
+        v["runRuleModel"]["faceVerify"] = json!(false);
+        assert!(!parse_policy_response(&v).unwrap().face_verify);
+    }
+
     #[test]
     fn sequence_rule_is_read_from_run_rule_model() {
         let mut v = base();

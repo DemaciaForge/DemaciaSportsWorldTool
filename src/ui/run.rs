@@ -234,7 +234,10 @@ impl App {
 
             mobile::row(ui, |ui| {
                 ui.label("人脸校验标记：");
-                ui.checkbox(&mut page.face_check, "faceCheck=1");
+                ui.checkbox(
+                    &mut page.face_check,
+                    "faceCheck=1（学校未开人脸时请取消勾选）",
+                );
             });
 
             mobile::row(ui, |ui| {
@@ -400,7 +403,7 @@ impl App {
         };
         let (dist, dur) = (plan.dist * 1000.0, plan.dur); // 米
         let start_ms = plan.start_ms;
-        let face_check = if page.face_check { 1 } else { 0 };
+        let face_check = Some(if page.face_check { 1 } else { 0 });
 
         let track_spec = match page.track_spec {
             crate::track::stadium::TrackSpec::Custom { .. } => {

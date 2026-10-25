@@ -86,9 +86,6 @@ fn cmd_run(rest: &[&str]) -> i32 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.0);
     let pace: f32 = get(&flags, "pace").map(parse_pace).unwrap_or(0.0);
-    let face = get(&flags, "face")
-        .map(|v| v == "1" || v == "true")
-        .unwrap_or(true);
     let (manual_altitude, manual_altitude_range) = match get(&flags, "altitude") {
         Some(value) => match crate::track::altitude::parse_spec(value) {
             Ok(Some(crate::track::altitude::AltitudeSpec::Single(value))) => (Some(value), None),
@@ -129,6 +126,15 @@ fn cmd_run(rest: &[&str]) -> i32 {
                 println!("  点位模式      {}", pol.sequence_mode());
                 println!("  sequenceRule      {}", pol.sequence_rule);
                 println!("  sequenceStrength  {}", pol.sequence_strength);
+                println!(
+                    "  人脸抽检      {} (faceVerify -> 提交 faceCheck={})",
+                    if pol.face_verify {
+                        "开启"
+                    } else {
+                        "未开启"
+                    },
+                    if pol.face_verify { 1 } else { 0 }
+                );
                 println!("  有效时长      {} s", pol.valid_time);
                 println!(
                     "  策略版本      policy={} timestamp={}",
@@ -221,7 +227,11 @@ fn cmd_run(rest: &[&str]) -> i32 {
         dist,
         dur,
         start_ms,
-        face_check: face as i64,
+        // 不显式传 --face 时跟随学校策略里的 faceVerify（None）。
+        // 学校没开人脸抽检却报 faceCheck=1，等于声称做过不存在的校验。
+        face_check: get(&flags, "face")
+            .map(|v| v == "1" || v == "true")
+            .map(i64::from),
         manual_altitude,
         manual_altitude_range,
         seed,
