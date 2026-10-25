@@ -163,7 +163,7 @@ fn fit_circle(points: &[(f64, f64)]) -> Option<((f64, f64), f64, f64)> {
     if d.abs() < 1e-12 {
         return None;
     }
-    let mut solve = |col: usize| -> f64 {
+    let solve = |col: usize| -> f64 {
         let mut mm = m;
         for row in 0..3 {
             mm[row][col] = rhs[row];

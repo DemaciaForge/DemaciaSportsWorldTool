@@ -11,6 +11,7 @@ use crate::location::Coordinate;
 use crate::track::custom::CustomRouteSpec;
 use crate::track::generate_road::RouteMode;
 use crate::track::generator::build_with_color_mode as gen_track;
+use crate::track::generator::build_with_color_mode_with_fences as gen_track_fenced;
 use crate::track::wire::{
     build_obs_object, build_obs_object_with_area, five_point_wrapper, five_point_wrapper_with_area,
     obs_keys, validate_five_point_wrapper,
@@ -251,6 +252,35 @@ pub fn run_full_flow(
             Err(e) => log(&format!("⚠ [fence] 独立接口获取失败，继续自由跑: {e}")),
         }
     }
+    // 跑道摆正用的围栏副本：真实操场的直道顺着场地长边铺，围栏就是场地边界。
+    // 这里只做一次 clone，不额外发请求——没有围栏时退化为纯几何拟合。
+    let layout_fences: Vec<Vec<(f64, f64)>> = prefetched_fences.clone().unwrap_or_default();
+    if !layout_fences.is_empty() {
+        log(&format!(
+            "√ [track] {} 个围栏用于摆正跑道直道",
+            layout_fences.len()
+        ));
+    }
+    // 本函数内所有经典轨迹生成都走带围栏的版本（含各路开销回退分支），
+    // 保证回退时摆正行为一致。闭包遮蔽同名别名，调用点无需改动。
+    let gen_track = |dist: f64,
+                     dur: i64,
+                     seed: u64,
+                     center: (f64, f64),
+                     start_ms: i64,
+                     points_bd: &[(f64, f64)],
+                     mode: crate::api::model::TrackColorMode| {
+        gen_track_fenced(
+            dist,
+            dur,
+            seed,
+            center,
+            start_ms,
+            points_bd,
+            mode,
+            &layout_fences,
+        )
+    };
     let pts = points_ctx.points.clone();
     if pts.is_empty() {
         return Err("实时点位为空 —— 拒绝本地样本兜底".into());
@@ -384,7 +414,7 @@ pub fn run_full_flow(
             "[track] 使用{}操场模式",
             params.track_spec.label()
         ));
-        crate::track::generator::build_stadium(
+        crate::track::generator::build_stadium_with_fences(
             params.dist,
             params.dur,
             params.seed,
@@ -392,6 +422,7 @@ pub fn run_full_flow(
             start_ms,
             &pts_bd,
             params.track_spec,
+            &layout_fences,
         )?
     } else {
         match params.route_mode {

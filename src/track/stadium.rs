@@ -92,6 +92,19 @@ pub fn make_stadium_ring_relaxed(
     spec: TrackSpec,
     skip_pose_check: bool,
 ) -> Result<PointRing, String> {
+    make_stadium_ring_with_fences(points, spec, skip_pose_check, &[])
+}
+
+/// 同 [`make_stadium_ring_relaxed`]，但用电子围栏把直道方向摆正。
+///
+/// 真实操场的直道顺着场地长边铺；围栏就是场地的边界，因此围栏最长边的方向就是
+/// 直道应有的方向。没有围栏时行为与 `make_stadium_ring_relaxed` 完全一致。
+pub fn make_stadium_ring_with_fences(
+    points: &[(f64, f64)],
+    spec: TrackSpec,
+    skip_pose_check: bool,
+    fences: &[Vec<(f64, f64)>],
+) -> Result<PointRing, String> {
     let dimensions = spec
         .dimensions()
         .ok_or_else(|| "请选择有效的操场规格".to_string())?;
@@ -116,7 +129,7 @@ pub fn make_stadium_ring_relaxed(
             )
         })
         .collect();
-    let (angle, offset) = fit_pose(&local, dimensions);
+    let (angle, offset) = fit_pose(&local, dimensions, fence_long_axis(fences));
     let mut dense: Vec<_> = rounded_rectangle(dimensions)
         .into_iter()
         .map(|point| rotate((point.0 + offset.0, point.1 + offset.1), angle))
@@ -183,28 +196,125 @@ fn nearest_unused(
         .unwrap_or(preferred)
 }
 
-fn fit_pose(points: &[(f64, f64)], dimensions: TrackDimensions) -> (f64, (f64, f64)) {
+/// 围栏长边方向（弧度，模 π），用于把跑道直道摆正。
+///
+/// 真实操场的直道几乎总是与场地长边平行（跑道顺着场地铺）。只按"哪条中心线穿过
+/// 打卡点最贴合"去搜角度，会得到一条斜放在场地里的跑道——地图上一眼就不像。
+///
+/// 取所有围栏边里最长的那条的方向；围栏不足 3 个点时返回 `None`（不做约束）。
+pub fn fence_long_axis(fences: &[Vec<(f64, f64)>]) -> Option<f64> {
+    let mut best_len = 0.0f64;
+    let mut best_angle = None;
+    for ring in fences {
+        let n = ring.len();
+        if n < 3 {
+            continue;
+        }
+        for i in 0..n {
+            let a = ring[i];
+            let b = ring[(i + 1) % n];
+            let dx = (b.1 - a.1) * MET_PER_DEG_LNG;
+            let dy = (b.0 - a.0) * MET_PER_DEG_LAT;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len > best_len {
+                best_len = len;
+                // 与 `rotate` 的约定一致：角度按 (x=lng, y=lat) 平面量取，模 π。
+                best_angle = Some(dy.atan2(dx).rem_euclid(std::f64::consts::PI));
+            }
+        }
+    }
+    best_angle
+}
+
+/// 两个方向（模 π）之间的最小夹角，结果落在 `[0, π/2]`。
+fn axis_delta(a: f64, b: f64) -> f64 {
+    let mut d = (a - b).rem_euclid(std::f64::consts::PI);
+    if d > std::f64::consts::FRAC_PI_2 {
+        d = std::f64::consts::PI - d;
+    }
+    d
+}
+
+/// 拟合跑道位姿：返回 (旋转角, 中心偏移)。
+///
+/// 两段式：
+///
+/// 1. 先只按几何拟合（"哪条中心线穿过打卡点最贴合"）；
+/// 2. 只有当几何本身**说不清方向**（每个打卡点的残差 RMS 超过
+///    [`POSE_AMBIGUOUS_RMS_M`]）时，才用围栏长边方向做先验重新拟合。
+///
+/// 做成条件触发而不是简单加权：加权在任何参数下都会在两种意图之间打架——权重小了
+/// 摆不正，权重大了会把数据明确说明是斜的跑道掰直。而"几何是否能定方向"本身是个
+/// 可判定的量，用残差一判就分开。
+fn fit_pose(
+    points: &[(f64, f64)],
+    dimensions: TrackDimensions,
+    fence_axis: Option<f64>,
+) -> (f64, (f64, f64)) {
+    let n = (points.len() as f64).max(1.0);
+    let (geometry_angle, geometry_offset, geometry_rms2) = search_pose(points, dimensions, None);
+    let Some(axis) = fence_axis else {
+        return (geometry_angle, geometry_offset);
+    };
+    // 残差已经很小：打卡点把跑道钉住了，不要再动它。
+    if geometry_rms2 <= POSE_AMBIGUOUS_RMS_M * POSE_AMBIGUOUS_RMS_M {
+        return (geometry_angle, geometry_offset);
+    }
+    let (angle, offset, rms2) = search_pose(points, dimensions, Some(axis));
+    // 加入先验后若几何反而变得很差，说明围栏与场地几何相互矛盾（围栏不是场地
+    // 边界的形状），此时宁可听几何的。
+    if rms2 > geometry_rms2 + POSE_AMBIGUOUS_RMS_M * POSE_AMBIGUOUS_RMS_M {
+        return (geometry_angle, geometry_offset);
+    }
+    let _ = n;
+    (angle, offset)
+}
+
+/// 每个打卡点到跑道中心线的残差 RMS 超过这个值（米），就认为几何定不了方向。
+const POSE_AMBIGUOUS_RMS_M: f64 = 5.0;
+
+/// 在 1° 网格上搜最优位姿；`fence_axis` 为 `Some` 时加围栏对齐惩罚。
+///
+/// 返回 (角度, 偏移, 每点残差平方均值)。
+fn search_pose(
+    points: &[(f64, f64)],
+    dimensions: TrackDimensions,
+    fence_axis: Option<f64>,
+) -> (f64, (f64, f64), f64) {
     let mut best_angle = 0.0;
     let mut best_error = f64::INFINITY;
     let mut best_offset = bbox_center(points);
+    let mut best_rms2 = f64::INFINITY;
+    // 对齐先验的量纲是「米」：偏离 1 rad 相当于每个打卡点被错放 `ALIGN_PENALTY_M` 米。
+    // 只在几何已判定为"说不清方向"时才会走到这里，所以这个值可以取大一些。
+    const ALIGN_PENALTY_M: f64 = 250.0;
+    let n = (points.len() as f64).max(1.0);
     for index in 0..=180 {
         let angle = -std::f64::consts::FRAC_PI_2 + index as f64 * std::f64::consts::PI / 180.0;
         let rotated: Vec<_> = points.iter().map(|&point| rotate(point, -angle)).collect();
         let offset = bbox_center(&rotated);
-        let error = rotated
+        let geometry = rotated
             .iter()
             .map(|&(x, y)| {
                 let d = distance_to_centerline((x - offset.0, y - offset.1), dimensions);
                 d * d
             })
             .sum::<f64>();
+        let mut error = geometry;
+        if let Some(axis) = fence_axis {
+            // 直道方向 = 旋转后的 x 轴；把它拉到围栏长边上。
+            let align = axis_delta(angle, axis);
+            let penalty = ALIGN_PENALTY_M * align;
+            error += n * penalty * penalty;
+        }
         if error < best_error {
             best_error = error;
             best_angle = angle;
             best_offset = offset;
+            best_rms2 = geometry / n;
         }
     }
-    (best_angle, best_offset)
+    (best_angle, best_offset, best_rms2)
 }
 
 fn rounded_rectangle(dimensions: TrackDimensions) -> Vec<(f64, f64)> {
@@ -336,5 +446,103 @@ mod tests {
     fn rejects_points_that_do_not_fit_the_selected_preset() {
         let points = [(38.9, 121.54), (38.92, 121.54), (38.9, 121.56)];
         assert!(make_stadium_ring(&points, TrackSpec::M400).is_err());
+    }
+
+    /// 围栏长边方向：取最长边，模 π。
+    #[test]
+    fn fence_long_axis_follows_the_longest_edge() {
+        // 南北向的长方形场地（长边沿经线方向）。
+        let lat = 38.9;
+        let lng = 121.54;
+        let dlat = 200.0 / MET_PER_DEG_LAT;
+        let dlng = 100.0 / MET_PER_DEG_LNG;
+        let north_south = vec![vec![
+            (lat + dlat, lng - dlng),
+            (lat + dlat, lng + dlng),
+            (lat - dlat, lng + dlng),
+            (lat - dlat, lng - dlng),
+        ]];
+        let axis = fence_long_axis(&north_south).expect("应有长边方向");
+        // 长边沿 ±lat（y 轴）⇒ 方向接近 ±π/2。
+        assert!(
+            axis_delta(axis, std::f64::consts::FRAC_PI_2) < 0.02,
+            "南北向场地的长边方向应接近 π/2，实际 {axis}"
+        );
+        // 东西向场地：长边沿经线，方向接近 0。
+        let east_west = vec![vec![
+            (lat + dlng / 2.0, lng - 2.0 * dlng),
+            (lat + dlng / 2.0, lng + 2.0 * dlng),
+            (lat - dlng / 2.0, lng + 2.0 * dlng),
+            (lat - dlng / 2.0, lng - 2.0 * dlng),
+        ]];
+        let axis = fence_long_axis(&east_west).expect("应有长边方向");
+        assert!(
+            axis_delta(axis, 0.0) < 0.02,
+            "东西向场地的长边方向应接近 0，实际 {axis}"
+        );
+        // 空围栏不做约束。
+        assert!(fence_long_axis(&[]).is_none());
+    }
+
+    /// 围栏把直道摆正：场地长边南北向时，拟合出的直道方向也应是南北向。
+    ///
+    /// 直接测 `fit_pose`（本轮改动的单元），不经过整环构造与打卡点吸附——
+    /// 那两步会把角度误差和吸附误差混在一起。
+    #[test]
+    fn fence_aligns_straight_direction() {
+        let dimensions = TrackSpec::M400.dimensions().unwrap();
+        // 无围栏时，正圆对称的输入会让角度落在搜索起点附近，不保证与场地平行。
+        let symmetric: Vec<(f64, f64)> = (0..8)
+            .map(|i| {
+                let a = i as f64 * std::f64::consts::TAU / 8.0;
+                (60.0 * a.cos(), 60.0 * a.sin())
+            })
+            .collect();
+        let (free_angle, _) = fit_pose(&symmetric, dimensions, None);
+
+        // 南北向场地：长边沿 y 轴 ⇒ 目标方向 π/2。
+        let lat = 38.9;
+        let lng = 121.54;
+        let dlat = 200.0 / MET_PER_DEG_LAT;
+        let dlng = 100.0 / MET_PER_DEG_LNG;
+        let fences = vec![vec![
+            (lat + dlat, lng - dlng),
+            (lat + dlat, lng + dlng),
+            (lat - dlat, lng + dlng),
+            (lat - dlat, lng - dlng),
+        ]];
+        let axis = fence_long_axis(&fences).expect("应有长边方向");
+        let (fenced_angle, _) = fit_pose(&symmetric, dimensions, Some(axis));
+
+        let delta = axis_delta(fenced_angle, axis);
+        assert!(
+            delta < 0.12,
+            "直道方向应与围栏长边平行，实际偏离 {:.1}°（无围栏时为 {:.1}°）",
+            delta.to_degrees(),
+            axis_delta(free_angle, axis).to_degrees()
+        );
+    }
+
+    /// 围栏只是先验，不是硬约束：打卡点明确说明跑道是斜的时，几何项必须能赢。
+    #[test]
+    fn fence_prior_yields_to_clear_geometry() {
+        let dimensions = TrackSpec::M400.dimensions().unwrap();
+        // 沿 45° 摆放的打卡点（贴着中心线）。
+        let slant = std::f64::consts::FRAC_PI_4;
+        let dense = rounded_rectangle(dimensions);
+        let step = (dense.len() / 16).max(1);
+        let on_ring: Vec<(f64, f64)> = dense
+            .iter()
+            .step_by(step)
+            .map(|&(x, y)| rotate((x, y), slant))
+            .collect();
+        // 围栏却说是东西向（0°）——与真实跑道差 45°。
+        let strongest_prior = Some(0.0);
+        let (angle, _) = fit_pose(&on_ring, dimensions, strongest_prior);
+        assert!(
+            axis_delta(angle, slant) < 0.25,
+            "几何明确时不应被围栏先验掰弯，实际偏离真值 {:.1}°",
+            axis_delta(angle, slant).to_degrees()
+        );
     }
 }

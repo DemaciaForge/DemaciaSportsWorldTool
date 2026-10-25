@@ -321,11 +321,22 @@ impl ShapeTracker {
 /// 三档优先级：显式跑道预设 → 打卡点拟合环 → 打卡点质心处的标准 400 m 跑道。
 /// 最后一项是"没有 OSM、没有跑道信息"时的兜底：校园里最可能跑的地方就是操场。
 pub fn site_ring(points_bd: &[(f64, f64)], spec: TrackSpec) -> Result<SiteRing, String> {
+    site_ring_with_fences(points_bd, spec, &[])
+}
+
+/// 同 [`site_ring`]，额外用电子围栏把跑道直道摆正。
+///
+/// 围栏 = 场地边界，操场直道顺着场地长边铺。围栏为空时行为与 `site_ring` 一致。
+pub fn site_ring_with_fences(
+    points_bd: &[(f64, f64)],
+    spec: TrackSpec,
+    fences: &[Vec<(f64, f64)>],
+) -> Result<SiteRing, String> {
     use super::geom::make_point_ring;
-    use super::stadium::make_stadium_ring_relaxed;
+    use super::stadium::make_stadium_ring_with_fences;
 
     if spec != TrackSpec::Auto {
-        let (dense, arcs, center) = make_stadium_ring_relaxed(points_bd, spec, true)?;
+        let (dense, arcs, center) = make_stadium_ring_with_fences(points_bd, spec, true, fences)?;
         let ring_m = arcs.last().copied().unwrap_or(400.0);
         return Ok(SiteRing {
             dense,
@@ -352,10 +363,11 @@ pub fn site_ring(points_bd: &[(f64, f64)], spec: TrackSpec) -> Result<SiteRing, 
     }
     // 兜底：以打卡点质心（不足 3 点时用点本身 / 原点）为中心的标准跑道。
     let center = centroid(points_bd);
-    let (dense, arcs, center) = make_stadium_ring_relaxed(
+    let (dense, arcs, center) = make_stadium_ring_with_fences(
         &[center, (center.0 + 1e-6, center.1)],
         TrackSpec::M400,
         true,
+        fences,
     )?;
     let ring_m = arcs.last().copied().unwrap_or(400.0);
     Ok(SiteRing {

@@ -20,7 +20,7 @@ use super::geom::{fmt_gain_time, make_point_ring, round_to, wgs84_to_bd09, Rng};
 use super::model::{GenPoint, Segment, TenWindow, Track};
 use super::postfix::apply_post_fixes;
 use super::realism::{fit_speeds_capped, sample_grid};
-use super::shape::{site_ring, ShapeTracker, ShapedPlan, SiteRing};
+use super::shape::{site_ring, site_ring_with_fences, ShapeTracker, ShapedPlan, SiteRing};
 use super::stadium::TrackSpec;
 use crate::api::model::TrackColorMode;
 use route_planner::{fatigue_from_km, gait, ou_cadence_series};
@@ -162,8 +162,22 @@ pub fn build_stadium(
     points_bd: &[(f64, f64)],
     spec: TrackSpec,
 ) -> Result<Track, String> {
+    build_stadium_with_fences(dist, dur, seed, _center, start_ms, points_bd, spec, &[])
+}
+
+/// 同 [`build_stadium`]，额外用电子围栏把跑道直道摆正到场地长边方向。
+pub fn build_stadium_with_fences(
+    dist: f64,
+    dur: i64,
+    seed: u64,
+    _center: (f64, f64),
+    start_ms: i64,
+    points_bd: &[(f64, f64)],
+    spec: TrackSpec,
+    fences: &[Vec<(f64, f64)>],
+) -> Result<Track, String> {
     let mut rng = Rng::new(seed);
-    let mut ring = site_ring(points_bd, spec)?;
+    let mut ring = site_ring_with_fences(points_bd, spec, fences)?;
     // `Auto` 时按目标距离选场地规模：短距离用 400 m 标准跑道，长距离换更大的外围
     // 路线。让人在 400 m 跑道上跑 20 圈既不像真人，也会把一圈挤进上百个采样点。
     if spec == TrackSpec::Auto {
@@ -174,12 +188,13 @@ pub fn build_stadium(
         };
         if (ring.ring_m - wanted).abs() > wanted * 0.25 {
             let center = ring.center;
-            if let Ok((dense, arcs, c)) = super::stadium::make_stadium_ring_relaxed(
+            if let Ok((dense, arcs, c)) = super::stadium::make_stadium_ring_with_fences(
                 &[center, (center.0 + 1e-6, center.1)],
                 TrackSpec::Custom {
                     total_m: wanted.round().clamp(200.0, 1000.0) as u32,
                 },
                 true,
+                fences,
             ) {
                 let rm = arcs.last().copied().unwrap_or(wanted);
                 ring = SiteRing {
@@ -220,24 +235,48 @@ pub fn build_with_color_mode(
     dist: f64,
     dur: i64,
     seed: u64,
-    _center: (f64, f64),
+    center: (f64, f64),
     start_ms: i64,
     points_bd: &[(f64, f64)],
     color_mode: TrackColorMode,
 ) -> Track {
+    build_with_color_mode_with_fences(
+        dist,
+        dur,
+        seed,
+        center,
+        start_ms,
+        points_bd,
+        color_mode,
+        &[],
+    )
+}
+
+/// 同 [`build_with_color_mode`]，额外用电子围栏把跑道直道摆正到场地长边方向。
+pub fn build_with_color_mode_with_fences(
+    dist: f64,
+    dur: i64,
+    seed: u64,
+    _center: (f64, f64),
+    start_ms: i64,
+    points_bd: &[(f64, f64)],
+    color_mode: TrackColorMode,
+    fences: &[Vec<(f64, f64)>],
+) -> Track {
     let mut rng = Rng::new(seed);
-    let mut ring =
-        site_ring(points_bd, TrackSpec::Auto).unwrap_or_else(|_| fallback_ring(points_bd));
+    let mut ring = site_ring_with_fences(points_bd, TrackSpec::Auto, fences)
+        .unwrap_or_else(|_| fallback_ring(points_bd));
     if dist > 3000.0 {
         let wanted = ((dist / 4.5).clamp(800.0, 2000.0) / 100.0).round() * 100.0;
         if (ring.ring_m - wanted).abs() > wanted * 0.25 {
             let center = ring.center;
-            if let Ok((dense, arcs, c)) = super::stadium::make_stadium_ring_relaxed(
+            if let Ok((dense, arcs, c)) = super::stadium::make_stadium_ring_with_fences(
                 &[center, (center.0 + 1e-6, center.1)],
                 TrackSpec::Custom {
                     total_m: wanted.round().clamp(200.0, 1000.0) as u32,
                 },
                 true,
+                fences,
             ) {
                 let rm = arcs.last().copied().unwrap_or(wanted);
                 ring = SiteRing {
@@ -457,11 +496,26 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         0
     };
     let mut prev_raw = tracker.ring_origin();
-    // 定位精度 / 卫星数：围绕本次会话基准缓慢游走。
+    // 定位精度：围绕本次会话基准缓慢游走（相邻点几乎相同）。
     let radius_mean = rng.uniform(1.5, 2.3);
     let mut radius_now = radius_mean;
-    let count_mean = rng.uniform(18.0, 31.0);
-    let mut count_now = count_mean;
+    // 卫星可见性是**位置的函数**，不是时间的函数：同一段路第二次跑过时读数应当相似，
+    // 因为挡住天空的还是那几栋楼。用几个不同波长的正弦叠加成一个确定性空间场，
+    // 逐点独立随机（或纯时间 OU）都做不到"绕回同一处读数又回来"这个性质。
+    // 波长取 270–570 m，对 400 m 一圈来说是每圈起伏数次，符合建筑间距的量级。
+    let sat_field = {
+        let p1 = rng.uniform(0.0, std::f64::consts::TAU);
+        let p2 = rng.uniform(0.0, std::f64::consts::TAU);
+        let p3 = rng.uniform(0.0, std::f64::consts::TAU);
+        move |x: f64, y: f64| -> f64 {
+            let f = 0.9 * (x * 0.011 + p1).sin()
+                + 0.7 * (y * 0.017 + p2).sin()
+                + 0.5 * ((x + y) * 0.023 + p3).sin();
+            (f / 2.1).clamp(-1.0, 1.0)
+        }
+    };
+    let count_mean = rng.uniform(20.0, 30.0);
+    let count_span = rng.uniform(5.0, 9.0);
     for i in 0..n {
         let mut point = if i <= 1 {
             tracker.advance(0.0, 0.0, &mut rng)
@@ -486,12 +540,11 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         prev_raw = point;
         let (lat, lng) = ring.to_bd(point.0, point.1);
         let (typ, lt) = kinds[i];
-        // 定位精度与卫星数：真机读数会是**缓慢游走**的（相邻点几乎相同），
-        // 逐点独立随机反而是机器特征。
+        // 定位精度缓慢游走；卫星数由空间场决定（同一段路读数可复现）。
         radius_now = (radius_now - radius_mean) * 0.85 + radius_mean + rng.gauss(0.0, 0.22);
         radius_now = radius_now.clamp(1.2, if typ == 3 { 6.5 } else { 3.2 });
-        count_now = (count_now - count_mean) * 0.9 + count_mean + rng.gauss(0.0, 1.6);
-        count_now = count_now.clamp(8.0, 44.0);
+        let count_now = count_mean + count_span * sat_field(point.0, point.1) + rng.gauss(0.0, 1.2);
+        let count_now = count_now.clamp(8.0, 44.0);
         let rad = round_to(radius_now, 2);
         let count = round_to(count_now, 0) as i64;
         let state = if color_mode == TrackColorMode::FullGreen {
@@ -735,14 +788,6 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
     track
 }
 
-fn steps_at(speeds: &[f64], dts: &[f64], i: usize) -> f64 {
-    if i < 2 {
-        0.0
-    } else {
-        speeds.get(i).copied().unwrap_or(0.0) * dts.get(i).copied().unwrap_or(0.0)
-    }
-}
-
 impl GenPoint {
     /// 平面坐标（米，相对量均可）——仅用于两点距离，坐标系一致即可。
     fn coords(&self) -> (f64, f64) {
@@ -778,110 +823,6 @@ fn nearest_arc(ring: &SiteRing, points_bd: &[(f64, f64)], rng: &mut Rng) -> f64 
 fn ground_altitude(_center: (f64, f64)) -> f64 {
     // 校园地面海拔与纬度没有解析关系；这里给一个中性基线，真实值由用户手动海拔覆盖。
     82.0
-}
-
-/// 删掉末尾「坐标没动」的多余采样点（真人不会在终点原地静默十几秒才开始采样）。
-///
-/// 删点时把被删点的步数并入保留的末点，避免「少了一个采样点、步数却凭空少了」。
-fn drop_duplicate_tail(locs: &mut Vec<GenPoint>) {
-    while locs.len() > 4 {
-        let m = locs.len();
-        let a = &locs[m - 2];
-        let b = &locs[m - 1];
-        let gap = ((a.gLat - b.gLat) * super::geom::MET_PER_DEG_LAT)
-            .hypot((a.gLng - b.gLng) * super::geom::MET_PER_DEG_LNG);
-        if gap < 0.5 {
-            let dropped = locs.remove(m - 1);
-            let k = locs.len();
-            locs[k - 1].steps = locs[k - 1].steps.max(dropped.steps);
-        } else {
-            break;
-        }
-    }
-}
-
-/// 按真实采样网格重排时间轴。
-///
-/// 点数是设备此刻真实产生的采样点数，把它们铺到 `0..target` 上：主间隔 5 s（±1.5 s
-/// 抖动），首点 0、末点正好 `target`。这样采样间隔不会被「末尾补点」压到 1–2 s，
-/// 末段拿到该有的时长，10 秒窗也不会被读成掉速。
-pub(crate) fn relayout_timeline(locs: &mut [GenPoint], target: i64, rng: &mut Rng) {
-    let n = locs.len();
-    if n < 3 || target <= 2 {
-        return;
-    }
-    let interior = (n - 2).max(1) as f64;
-    let slot = target as f64 / (interior + 1.0);
-    let mut t = 0.0f64;
-    for i in 1..n {
-        if i == 1 {
-            t = 0.0;
-        } else if i == n - 1 {
-            t = target as f64;
-        } else {
-            let jitter = if rng.random() < 0.15 {
-                rng.uniform(-1.5, 1.5)
-            } else {
-                0.0
-            };
-            t = (t + slot + jitter).min(target as f64 - 1.0);
-        }
-        locs[i].totalTime = (t.round() as i64).max(locs[i - 1].totalTime);
-    }
-    for i in 2..n - 1 {
-        if locs[i].totalTime <= locs[i - 1].totalTime {
-            locs[i].totalTime = locs[i - 1].totalTime + 1;
-        }
-    }
-    locs[n - 1].totalTime = target.max(locs[n - 2].totalTime + 1);
-}
-
-/// 停下之后补 1–2 个采样点（真人冲过终点会走两步再站着喘气）。
-///
-/// 这些点的坐标只做厘米级 GPS 抖动、速度为步行级，因此末段不再是「几秒跑完最后几米」，
-/// 10 秒窗不会读成掉速；累计距离只小幅增加，总距离与轨迹几何仍然自洽。
-pub(crate) fn append_cool_down(locs: &mut Vec<GenPoint>, target_time: i64, rng: &mut Rng) {
-    if locs.len() < 4 {
-        return;
-    }
-    let last = locs.len() - 1;
-    let mut t = locs[last].totalTime;
-    let mut anchor = (locs[last].gLat, locs[last].gLng);
-    let mut steps = locs[last].steps;
-    let mut extra = 0;
-    while t < target_time - 1 && extra < 2 {
-        extra += 1;
-        let dt = 5.0f64.min((target_time - t) as f64);
-        if dt < 1.0 {
-            break;
-        }
-        t += dt as i64;
-        // 站着不动，只有 GPS 抖动（±1 m）
-        anchor = (
-            anchor.0 + rng.gauss(0.0, 1.0) / super::geom::MET_PER_DEG_LAT,
-            anchor.1 + rng.gauss(0.0, 1.0) / super::geom::MET_PER_DEG_LNG,
-        );
-        // 走走停停：约 0.6 m/s 的步行位移折算成步数
-        let walk_m = rng.uniform(0.0, 1.2) * dt;
-        steps += (walk_m / 0.72).round() as i64;
-        let mut p = locs[last].clone();
-        p.id = locs[last].id + extra as i64;
-        p.totalTime = t;
-        p.validTime = t;
-        p.gainTimeMs = locs[last].gainTimeMs + extra as i64 * 1000;
-        p.gainTime = fmt_gain_time(p.gainTimeMs);
-        p.gLat = round_to(anchor.0, 7);
-        p.gLng = round_to(anchor.1, 7);
-        p.steps = steps;
-        p.ptype = 6;
-        p.locType = 1;
-        p.speed = round_to(rng.uniform(0.0, 1.6), 4);
-        p.avgSpeed = round_to(walk_m / dt, 4);
-        p.bdA = locs[last].bdA;
-        p.bdD = round_to((locs[last].bdD + rng.gauss(0.0, 25.0)).rem_euclid(360.0), 2);
-        p.bdS = round_to(rng.uniform(0.1, 0.5), 3);
-        locs.push(p);
-    }
 }
 
 /// 把打卡点吸附到最近采样点，但**只有当走过去的代价可以接受时才落位**。
@@ -1141,6 +1082,45 @@ mod tests {
         assert!((track.totalDistance / 2_000.0 - 1.0).abs() < 0.03);
         assert!((track.totalDistance / 400.0).round() >= 4.0);
         assert!(track.locations.len() > 100);
+    }
+
+    /// 卫星数是**位置的函数**：绕回同一处时读数应当回来，而不是随机重掷。
+    ///
+    /// 逐点独立随机或纯时间 OU 都过不了这条——它们把"同一段路第二次跑过"当成
+    /// 全新的抽样。真机上是同一批楼挡着同一片天。
+    #[test]
+    fn satellite_count_is_a_function_of_place() {
+        let points = site_points();
+        // 跑 8 圈，同一条跑道会被反复经过。
+        let track = build(3_200.0, 1_180, 11, points[0], 1_700_000_000_000, &points);
+        let locs = &track.locations;
+
+        // 1) 整个环上要有明显起伏（不是常数）。
+        let cs: Vec<f64> = locs.iter().map(|p| p.count as f64).collect();
+        let lo = cs.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = cs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(hi - lo >= 6.0, "卫星数在整圈上几乎不变（{lo}..{hi}）");
+
+        // 2) 空间上邻近的点读数应当接近：取 3 m 内的点对，平均差要远小于极差。
+        let mut near_sum = 0.0;
+        let mut near_n = 0usize;
+        for i in 0..locs.len() {
+            for j in (i + 1)..locs.len() {
+                let dx = (locs[j].gLng - locs[i].gLng) * MET_PER_DEG_LNG;
+                let dy = (locs[j].gLat - locs[i].gLat) * MET_PER_DEG_LAT;
+                if (dx * dx + dy * dy).sqrt() <= 3.0 {
+                    near_sum += (locs[j].count - locs[i].count).abs() as f64;
+                    near_n += 1;
+                }
+            }
+        }
+        assert!(near_n >= 20, "样本不足以判断空间相关性（{near_n} 对）");
+        let near_mean = near_sum / near_n as f64;
+        assert!(
+            near_mean < 3.5,
+            "同一处的卫星数应相近，实测邻近点平均差 {near_mean:.1}（极差 {:.0}）",
+            hi - lo
+        );
     }
 
     #[test]
