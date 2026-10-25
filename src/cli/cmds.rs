@@ -22,6 +22,7 @@ pub fn dispatch(args: Vec<String>) -> i32 {
         "obs-get" => cmd_obs_get(&rest),
         "obs-sample" => cmd_obs_sample(&rest),
         "obs-real" => cmd_obs_real(&rest),
+        "ledger" => cmd_ledger(&rest),
         "ai-records" => cmd_ai_records(&rest),
         "ai-info" => cmd_ai_info(&rest),
         "semester" => cmd_semester(),
@@ -664,6 +665,73 @@ fn cmd_obs_real(rest: &[&str]) -> i32 {
     } else {
         0
     }
+}
+
+/// 打印本地提交台账（每次成功提交的 rrid / uuid / 起跑时刻）。
+///
+/// 服务端列表只保留最近 10 条，更早的记录会被挤出去；台账保证这些标识不会丢，
+/// 因此任何一条历史记录都还能 `obs-real --rrid <n>` 拉回原始轨迹。
+///
+/// 用法：
+///   `ledger`            最近 20 条（新的在前）
+///   `ledger --all`      全部
+///   `ledger --hint`     只打印可直接执行的 obs-real 命令
+fn cmd_ledger(rest: &[&str]) -> i32 {
+    let flags = parse_flags(rest);
+    let all = get(&flags, "all").is_some();
+    let hint_only = get(&flags, "hint").is_some();
+    let mut rows = crate::ledger::read_all();
+    if rows.is_empty() {
+        println!("台账为空（{}）", crate::ledger::LEDGER_FILE);
+        return 0;
+    }
+    rows.reverse(); // 新的在前
+    if !all {
+        rows.truncate(20);
+    }
+    if hint_only {
+        for r in rows.iter() {
+            println!("{}", r.hint());
+        }
+        return 0;
+    }
+    println!(
+        "{:<11} {:<17} {:>7} {:>7} {:>6} {:>7} {:>5}  {}",
+        "rrid", "起跑", "距离m", "时长", "配速", "步数", "OBS", "模式"
+    );
+    for r in rows.iter() {
+        use chrono::TimeZone;
+        let t = chrono::Local
+            .timestamp_millis_opt(r.start_ms)
+            .single()
+            .map(|x| x.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "-".into());
+        let pace = if r.total_dis > 0.0 {
+            let s = r.total_time as f64 / (r.total_dis / 1000.0);
+            format!("{}:{:02}/km", s as i64 / 60, s as i64 % 60)
+        } else {
+            "-".into()
+        };
+        let obs = match r.obs_ok {
+            Some(n) => format!("{}/2", n.min(2)),
+            None => "-".to_string(),
+        };
+        println!(
+            "{:<11} {:<17} {:>7.0} {:>7} {:>6} {:>7} {:>5}  {}",
+            r.rrid,
+            t,
+            r.total_dis,
+            format!("{}:{:02}", r.total_time / 60, r.total_time % 60),
+            pace,
+            r.total_steps,
+            obs,
+            r.route_mode
+        );
+    }
+    if rows.len() >= 20 && !all {
+        println!("（只显示最近 20 条，--all 看全部）");
+    }
+    0
 }
 
 /// 本地生成一份 OBS 对象样本（不提交；结构对照用）。

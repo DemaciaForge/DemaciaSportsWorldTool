@@ -609,6 +609,38 @@ pub fn run_full_flow(
     let result = submit_record(client, &sp, log)?;
     sleep_secs(1);
 
+    // ⑤b 提交台账：服务端列表只保留最近 10 条，被挤出后 rrid/uuid 就再也拿不到，
+    //     那条记录的 OBS 也就无法回读。在"提交成功"这一刻先把标识落盘。
+    let ledger_entry = crate::ledger::SubmittedRecord {
+        submitted_at: chrono::Utc::now().timestamp_millis(),
+        rrid: result.rrid,
+        uuid: result.uuid.clone(),
+        start_ms: result.start_ms,
+        total_dis: result.total_dis,
+        total_time: result.total_time,
+        total_steps: result.total_steps,
+        target_dist: params.dist,
+        target_dur: params.dur,
+        points: sp.track.locations.len(),
+        route_mode: match params.route_mode {
+            RouteMode::Road => "road",
+            RouteMode::Custom => "custom",
+            RouteMode::Legacy => "legacy",
+        }
+        .to_string(),
+        seed: params.seed,
+        realism_passed: true,
+        obs_ok: None,
+    };
+    match crate::ledger::append(&ledger_entry) {
+        Ok(path) => log(&format!(
+            "√ [ledger] 已记账 rrid={} → {}",
+            result.rrid,
+            path.display()
+        )),
+        Err(e) => log(&format!("⚠ [ledger] 记账失败（不影响本次提交）: {e}")),
+    }
+
     // ⑥ OBS 上传（双 key）
     log("[obs] 上传 OBS 对象（gzip+base64，10 键）…");
     // 从提交结果回填 track.startTime（含随机秒偏移），保证 body/OBS/flag 全链一致
@@ -629,6 +661,10 @@ pub fn run_full_flow(
         log("√ [obs] 双 key 上传成功");
     } else {
         log(&format!("⚠ [obs] 上传成功 {obs_ok}/2"));
+    }
+    // 回填 OBS 结果；失败只记日志，台账里 rrid 已经在上面落盘了。
+    if let Err(e) = crate::ledger::set_obs_ok(result.rrid, obs_ok) {
+        log(&format!("⚠ [ledger] OBS 结果回填失败: {e}"));
     }
 
     // ⑦ 详情验证
