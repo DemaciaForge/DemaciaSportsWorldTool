@@ -1,31 +1,12 @@
 //! 轨迹层：生成器 / OBS 组装 / 官方卡路里。
 
-/// 路线算法模式。
-///
-/// 路网（Road）模式已删除：它自带一套速度剖面与字段逻辑、不走 `assemble`，
-/// 是维护负担的主要来源。剩下经典打卡点环与高德自定义路线两条路径。
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum RouteMode {
-    /// 经典打卡点环（Catmull-Rom）。
-    #[default]
-    Legacy,
-    /// 自定义路线（高德步行路径）。
-    Custom,
-}
-
-impl RouteMode {
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "custom" => RouteMode::Custom,
-            _ => RouteMode::Legacy,
-        }
-    }
-}
+// 路线算法只剩一条：经典打卡点环（Catmull-Rom 连接打卡点）。
+// 路网（Road）与高德自定义路线两条路径已删除——前者自带一套速度剖面与字段
+// 逻辑、不走 `assemble`，后者依赖外部路径服务，都是维护负担的主要来源。
 
 pub mod altitude;
 pub mod biomech;
 pub mod calorie;
-pub mod custom;
 pub mod generator;
 pub mod geom;
 pub mod model;
@@ -38,9 +19,7 @@ pub mod wire;
 #[cfg(test)]
 mod tests {
     use super::generator::build;
-    use super::generator::build_with_color_mode;
     use super::geom::{MET_PER_DEG_LAT, MET_PER_DEG_LNG};
-    use crate::api::model::TrackColorMode;
 
     use super::wire::*;
 
@@ -119,16 +98,16 @@ mod tests {
         assert!(track.totalSteps > 500, "steps={}", track.totalSteps);
     }
 
+    /// 路线颜色固定全绿色：所有点都必须是官方详情页识别为绿色的形态。
     #[test]
-    fn full_green_mode_uses_only_green_track_points() {
-        let track = build_with_color_mode(
+    fn all_track_points_are_green() {
+        let track = build(
             3300.0,
             1220,
             42,
             (38.9, 121.54),
             1_788_958_186_123,
             &sample_points(),
-            TrackColorMode::FullGreen,
         );
         let last = track.locations.len() - 1;
         for (i, point) in track.locations.iter().enumerate() {
@@ -144,22 +123,6 @@ mod tests {
             assert_eq!(point.state, 1);
             assert_eq!(point.bdG, 1);
         }
-    }
-
-    #[test]
-    fn mixed_mode_preserves_legacy_color_variation() {
-        let track = build_with_color_mode(
-            3300.0,
-            1220,
-            42,
-            (38.9, 121.54),
-            1_788_958_186_123,
-            &sample_points(),
-            TrackColorMode::HalfGreenGray,
-        );
-        assert!(track.locations.iter().any(|point| {
-            !matches!(point.ptype, 0 | 5 | 6) || point.state != 1 || point.bdG != 1
-        }));
     }
 
     /// 打卡点吸附：轨迹必过点位。

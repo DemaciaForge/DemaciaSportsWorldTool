@@ -11,7 +11,6 @@ pub fn dispatch(args: Vec<String>) -> i32 {
         "login" => cmd_login(&rest),
         "logout" => cmd_logout(),
         "run" => cmd_run(&rest),
-        "route" => cmd_route(&rest),
         "template" => cmd_template(&rest),
         "records" => cmd_records(),
         "records-raw" => cmd_records_raw(&rest),
@@ -112,41 +111,6 @@ fn cmd_run(rest: &[&str]) -> i32 {
     let identity = model::load_identity();
     let sess = model::load_session();
     let mut client = ApiClient::new(identity, sess.is_logged_in().then_some(sess));
-    let track_color_mode = match get(&flags, "track-color") {
-        None => cfg.track_color_mode,
-        Some("mixed") | Some("gray") | Some("grey") | Some("half-green-gray") => {
-            model::TrackColorMode::HalfGreenGray
-        }
-        Some("green") | Some("full-green") | Some("full_green") => model::TrackColorMode::FullGreen,
-        Some(value) => {
-            eprintln!("--track-color 必须是 full-green 或 half-green-gray（收到 {value}）");
-            return 1;
-        }
-    };
-
-    let custom_spec = match (get(&flags, "origin"), get(&flags, "destination")) {
-        (Some(o), Some(d)) => Some(crate::track::custom::CustomRouteSpec {
-            origin: o.to_string(),
-            destination: d.to_string(),
-            loop_mode: get(&flags, "loop").is_some(),
-            laps: get(&flags, "laps")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
-        }),
-        (Some(_), None) | (None, Some(_)) => {
-            eprintln!("--origin 与 --destination 必须同时提供");
-            return 1;
-        }
-        (None, None) => None,
-    };
-    let route_mode = if custom_spec.is_some() {
-        crate::track::RouteMode::Custom
-    } else {
-        crate::track::RouteMode::from_str(get(&flags, "route").unwrap_or(&cfg.route_mode))
-    };
-    let amap_key = get(&flags, "amap-key")
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| cfg.amap_key.clone());
 
     let dist = if dist_km > 0.0 {
         dist_km as f64 * 1000.0
@@ -181,12 +145,8 @@ fn cmd_run(rest: &[&str]) -> i32 {
         face_check: face as i64,
         manual_altitude,
         manual_altitude_range,
-        track_color_mode,
         seed,
-        route_mode,
         track_spec: cfg.track_spec,
-        custom: custom_spec,
-        amap_key,
     };
     // --dry-run：只生成并自检，不上传、不提交。用来在真实提交前确认轨迹合法。
     if dry_run {
@@ -234,85 +194,6 @@ fn cmd_run(rest: &[&str]) -> i32 {
             1
         }
     }
-}
-
-/// 自定义路线预览：只调高德接口，不登录、不访问学校服务器、不提交。
-/// --out 可导出 GPX（GCJ-02 坐标）供外部查看。
-fn cmd_route(rest: &[&str]) -> i32 {
-    let flags = parse_flags(rest);
-    let cfg = model::load_config();
-    let key = get(&flags, "amap-key")
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| cfg.amap_key.clone());
-    let (Some(origin), Some(destination)) = (get(&flags, "origin"), get(&flags, "destination"))
-    else {
-        eprintln!("缺少 --origin / --destination（地址或 经度,纬度 坐标）");
-        return 1;
-    };
-    let spec = crate::track::custom::CustomRouteSpec {
-        origin: origin.to_string(),
-        destination: destination.to_string(),
-        loop_mode: get(&flags, "loop").is_some(),
-        laps: get(&flags, "laps")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0),
-    };
-    match crate::amap::fetch_custom_ring(&spec, &key) {
-        Ok(ring) => {
-            println!("高德自定义路线预览（仅本地，不上传）");
-            println!(
-                "模式：{}",
-                if ring.loop_mode {
-                    "绕圈（去程+返程闭环）"
-                } else {
-                    "单程"
-                }
-            );
-            println!("去程：{:.0} m", ring.leg_length_m);
-            println!(
-                "闭环总长：{:.0} m（{} 个折线点）",
-                ring.total_length_m,
-                ring.points_bd.len()
-            );
-            if spec.laps > 0 {
-                println!(
-                    "圈数：{} 圈 → {:.0} m",
-                    spec.laps,
-                    spec.laps as f64 * ring.total_length_m
-                );
-            }
-            if let Some(out) = get(&flags, "out") {
-                match write_gpx(out, &ring) {
-                    Ok(()) => println!("GPX 已导出 {out}（GCJ-02）"),
-                    Err(e) => {
-                        eprintln!("GPX 导出失败: {e}");
-                        return 1;
-                    }
-                }
-            }
-            0
-        }
-        Err(e) => {
-            eprintln!("路线获取失败: {e}");
-            1
-        }
-    }
-}
-
-/// 将闭环路线导出为 GPX（BD-09 → GCJ-02）。
-fn write_gpx(path: &str, ring: &crate::track::custom::CustomRing) -> Result<(), String> {
-    let mut body = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <gpx version=\"1.1\" creator=\"DemaciaSportsWorldTool\">\n  <trk><name>custom-route</name><trkseg>\n",
-    );
-    for &(la, lo) in &ring.points_bd {
-        let (glat, glng) = crate::track::wire::bd09_to_gcj02(la, lo);
-        body.push_str(&format!(
-            "    <trkpt lat=\"{glat:.7}\" lon=\"{glng:.7}\"></trkpt>\n"
-        ));
-    }
-    body.push_str("  </trkseg></trk>\n</gpx>\n");
-    std::fs::write(path, body).map_err(|e| format!("写入 {path} 失败: {e}"))
 }
 
 fn cmd_template(rest: &[&str]) -> i32 {

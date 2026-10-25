@@ -1,6 +1,6 @@
 //! 自然轨迹生成器。
 //!
-//! 四种几何入口（打卡点拟合环 / 标准跑道 / 真实道路 / 自定义路线）共用同一个组装器
+//! 两种几何入口（打卡点拟合环 / 标准跑道）共用同一个组装器
 //! [`assemble`]：先由各入口给出「沿场地路线的前进量」，再由 [`assemble`] 把前进量换算
 //! 成带横向漂移、带进场/离场段的坐标，并同时产出协议字段。
 //!
@@ -23,7 +23,6 @@ use super::postfix::apply_post_fixes;
 use super::realism::{fit_speeds_capped, sample_grid};
 use super::shape::{site_ring_with_fences, ShapeTracker, ShapedPlan, SiteRing};
 use super::stadium::TrackSpec;
-use crate::api::model::TrackColorMode;
 
 /// 有效配速窗口（判定规则 2'21"-10'00"/km ≈ 1.667-7.092 m/s），硬边界留余量。
 pub const SPEED_FLOOR: f64 = 1.90;
@@ -134,15 +133,7 @@ pub fn build(
     start_ms: i64,
     points_bd: &[(f64, f64)],
 ) -> Track {
-    build_with_color_mode(
-        dist,
-        dur,
-        seed,
-        _center,
-        start_ms,
-        points_bd,
-        TrackColorMode::FullGreen,
-    )
+    build_with_fences(dist, dur, seed, _center, start_ms, points_bd, &[])
 }
 
 #[cfg_attr(not(test), allow(dead_code))] // 仅供测试断言使用
@@ -223,7 +214,6 @@ pub fn build_stadium_with_fences(
         times,
         dts,
         speeds: w,
-        color_mode: TrackColorMode::FullGreen,
         snap_points_bd: points_bd,
         snap_radius_m: 40.0,
         start_at_ring_origin: false,
@@ -232,37 +222,14 @@ pub fn build_stadium_with_fences(
     }))
 }
 
-/// 生成轨迹并选择详情页路线颜色模式。
-pub fn build_with_color_mode(
-    dist: f64,
-    dur: i64,
-    seed: u64,
-    center: (f64, f64),
-    start_ms: i64,
-    points_bd: &[(f64, f64)],
-    color_mode: TrackColorMode,
-) -> Track {
-    build_with_color_mode_with_fences(
-        dist,
-        dur,
-        seed,
-        center,
-        start_ms,
-        points_bd,
-        color_mode,
-        &[],
-    )
-}
-
-/// 同 [`build_with_color_mode`]，额外用电子围栏把跑道直道摆正到场地长边方向。
-pub fn build_with_color_mode_with_fences(
+/// 生成轨迹；`fences` 为电子围栏，用于把跑道直道摆正到场地长边方向。
+pub fn build_with_fences(
     dist: f64,
     dur: i64,
     seed: u64,
     _center: (f64, f64),
     start_ms: i64,
     points_bd: &[(f64, f64)],
-    color_mode: TrackColorMode,
     fences: &[Vec<(f64, f64)>],
 ) -> Track {
     let mut rng = Rng::new(seed);
@@ -301,7 +268,6 @@ pub fn build_with_color_mode_with_fences(
         times,
         dts,
         speeds: w,
-        color_mode,
         snap_points_bd: points_bd,
         snap_radius_m: 40.0,
         start_at_ring_origin: false,
@@ -323,13 +289,12 @@ pub(crate) struct Assembly<'a> {
     pub dts: Vec<f64>,
     /// 逐点目标速度（米/秒），长度与 `times` 一致。
     pub speeds: Vec<f64>,
-    pub color_mode: TrackColorMode,
     /// 需要吸附的打卡点（BD）。
     pub snap_points_bd: &'a [(f64, f64)],
     /// 吸附半径（米）。
     #[allow(dead_code)] // 装配参数留档：当前吸附半径由常量 SNAP_RADIUS_M 给出
     pub snap_radius_m: f64,
-    /// true = 起点固定在场路线原点（自定义路线 / 跑道语义）。
+    /// true = 起点固定在场路线原点（跑道语义）。
     pub start_at_ring_origin: bool,
     pub rng: Rng,
     /// 本次实际沿路线跑到多远（米）。`None` = 由形态参数按目标距离换算。
@@ -377,7 +342,6 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         times,
         dts,
         mut speeds,
-        color_mode,
         snap_points_bd,
         snap_radius_m: _,
         start_at_ring_origin,
@@ -414,7 +378,7 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         .map(|i| if i < 2 { 0.0 } else { speeds[i] * step_dt[i] })
         .collect();
 
-    // ② 形态：进场段 + 绕圈 + 离场段（自定义路线 / 跑道语义下全程都在路线上）
+    // ② 形态：进场段 + 绕圈 + 离场段（跑道语义下全程都在路线上）
     let mut plan =
         ShapedPlan::with_access(dist, dur_s, ring.ring_m, &mut rng, !start_at_ring_origin);
     // `loop_m` 必须等于「实际要跑的距离」：形态参数按周长估的圈数在这里没意义
@@ -440,44 +404,9 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
     );
     // 环线弧长与前进量是同一把尺子：tracker 按 `step_m` 推进弧长，坐标由弧长插值，
     // 因此「实际走过的距离」永远等于 `step_m` 之和，不需要再做几何拉伸校准。
-    // ③ 点位类型（与旧实现同分布；FullGreen 全部归一为普通点）
-    let kinds: Vec<(i64, i64)> = match color_mode {
-        TrackColorMode::FullGreen => vec![(0, 1); n],
-        TrackColorMode::HalfGreenGray => {
-            let tl_w = [
-                ((-1i64, 4i64), 54u32),
-                ((-1, 1), 27),
-                ((-1, 12), 13),
-                ((-1, 5), 3),
-                ((-1, 6), 2),
-            ];
-            let mut kinds: Vec<(i64, i64)> = Vec::with_capacity(n);
-            for _ in 0..n {
-                let u = rng.random();
-                if u < 0.39 {
-                    kinds.push((3, 1));
-                } else if u < 0.93 {
-                    kinds.push((0, 1));
-                } else if u < 0.96 {
-                    kinds.push(rng.weighted(&tl_w));
-                } else {
-                    kinds.push((rng.choice(&[1, 1, 1, 1, 2, 2]), 1));
-                }
-            }
-            for i in 1..kinds.len() {
-                let prev_drift = kinds[i - 1].0 == -1 || kinds[i - 1].0 == 5 || kinds[i - 1].0 == 6;
-                if kinds[i].0 != -1 && prev_drift && rng.random() < 0.08 {
-                    kinds[i] = (if rng.random() < 0.75 { 7 } else { 8 }, 1);
-                }
-            }
-            for i in 1..n {
-                if kinds[i].0 == -1 && kinds[i - 1].0 == -1 {
-                    kinds[i] = (rng.choice(&[3, 0]), 1);
-                }
-            }
-            kinds
-        }
-    };
+    // ③ 点位类型：路线颜色固定全绿色，所有点归一为普通点（type 0 / state 1）。
+    //    官方便携详情页据此把整条路线画成绿色。
+    let kinds: Vec<(i64, i64)> = vec![(0, 1); n];
 
     // ④ 生物力学：步频在「由速度与疲劳算出的目标值」附近 OU 波动，步幅由
     //    v = cad/60 × stride 反解，因此速度、步频、步幅三者恒等自洽。
@@ -550,13 +479,8 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         let count_now = count_now.clamp(8.0, 44.0);
         let rad = round_to(radius_now, 2);
         let count = round_to(count_now, 0) as i64;
-        let state = if color_mode == TrackColorMode::FullGreen {
-            1
-        } else if typ == 0 {
-            rng.weighted(&[(1, 145), (2, 45), (3, 164)])
-        } else {
-            rng.weighted(&[(1, 145), (2, 256), (3, 151)])
-        };
+        let state = 1;
+
         locs.push(GenPoint {
             id: i as i64 + 1,
             flag: start_ms,
@@ -584,11 +508,8 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
             bdA: round_to(alt0, 2),
             bdD: 0.0,
             bdS: round_to(rng.uniform(0.05, 0.35), 3),
-            bdG: if color_mode == TrackColorMode::FullGreen {
-                1
-            } else {
-                rng.choice(&[1, 1, 1, -1])
-            },
+            bdG: 1,
+
             count,
             dtr: 0.0,
             state,
@@ -725,7 +646,7 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
 
     // ⑦b 哨兵点 / 首末点协议（时间轴由采样网格给出，这里只管类型位）
     apply_post_fixes(&mut locs, &mut rng, start_ms);
-    if color_mode == TrackColorMode::FullGreen {
+    {
         let last_index = locs.len().saturating_sub(1);
         for (i, point) in locs.iter_mut().enumerate() {
             point.ptype = if i == 1 {

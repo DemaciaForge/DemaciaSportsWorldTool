@@ -8,14 +8,12 @@ use super::policy::fetch_policy;
 use super::records::fetch_one_record;
 use super::submit::{submit_record, SubmitParams, SubmitResult};
 use crate::location::Coordinate;
-use crate::track::custom::CustomRouteSpec;
-use crate::track::generator::build_with_color_mode as gen_track;
-use crate::track::generator::build_with_color_mode_with_fences as gen_track_fenced;
+use crate::track::generator::build as gen_track;
+use crate::track::generator::build_with_fences as gen_track_fenced;
 use crate::track::wire::{
     build_obs_object, build_obs_object_with_area, five_point_wrapper, five_point_wrapper_with_area,
     obs_keys, validate_five_point_wrapper,
 };
-use crate::track::RouteMode;
 use rand_distr::{Distribution, Normal};
 use serde_json::{json, Value};
 
@@ -32,16 +30,10 @@ pub struct RunParams {
     /// 用户手动填写的海拔范围；与单值字段兼容，范围优先。
     pub manual_altitude_range: Option<crate::track::altitude::AltitudeRange>,
     /// 详情页路线颜色模式。
-    pub track_color_mode: crate::api::model::TrackColorMode,
     pub seed: u64,
     /// 路线算法模式。
-    pub route_mode: RouteMode,
     /// Optional standard athletics-track preset; Auto preserves route_mode behavior.
     pub track_spec: crate::track::stadium::TrackSpec,
-    /// 自定义路线参数（route_mode == Custom 时使用）。
-    pub custom: Option<CustomRouteSpec>,
-    /// 高德 Web 服务 Key（自定义路线用；为空时读 config.amap_key）。
-    pub amap_key: String,
 }
 
 pub struct RunOutcome {
@@ -120,7 +112,6 @@ pub fn run_dry_run(params: &RunParams, anchor: Coordinate) -> Result<DryRunSumma
         (anchor.latitude, anchor.longitude),
         params.start_ms,
         &point_coords,
-        params.track_color_mode,
     );
     if let Some(range) = params.manual_altitude_range {
         crate::track::altitude::override_bd_a_range(&mut track, range)?;
@@ -296,18 +287,8 @@ pub fn run_full_flow(
                      seed: u64,
                      center: (f64, f64),
                      start_ms: i64,
-                     points_bd: &[(f64, f64)],
-                     mode: crate::api::model::TrackColorMode| {
-        gen_track_fenced(
-            dist,
-            dur,
-            seed,
-            center,
-            start_ms,
-            points_bd,
-            mode,
-            &layout_fences,
-        )
+                     points_bd: &[(f64, f64)]| {
+        gen_track_fenced(dist, dur, seed, center, start_ms, points_bd, &layout_fences)
     };
     let pts = points_ctx.points.clone();
     if pts.is_empty() {
@@ -331,9 +312,13 @@ pub fn run_full_flow(
         ));
     }
 
-    // ③ 轨迹生成（经典打卡点环 / 自定义路线）
+    // ③ 轨迹生成：经典打卡点环
     let pts_bd = points::points_bd(&pts);
-    log(&format!("√ [track] 打卡点 {} 个", pts_bd.len()));
+    log(&format!(
+        "√ [track] 打卡点 {} 个（提交时保留 {} 个普通点，其余标为必经点）",
+        pts_bd.len(),
+        crate::track::wire::ordinary_point_count(&pts)
+    ));
     // 提交/OBS 只报实际经过的硬点（Road 模式），避免地图出现不在轨迹上的普通点；
     // Legacy 走全部点位，保持原行为。
     let submitted_pts: Vec<Value> = pts.clone();
@@ -400,34 +385,14 @@ pub fn run_full_flow(
             &layout_fences,
         )?
     } else {
-        match params.route_mode {
-            RouteMode::Legacy => gen_track(
-                params.dist,
-                params.dur,
-                params.seed,
-                (anchor.latitude, anchor.longitude),
-                start_ms,
-                &pts_bd,
-                params.track_color_mode,
-            ),
-            RouteMode::Custom => {
-                match build_custom_track(&params, &pol.must_points, &pts_bd, start_ms, log) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        log(&format!("⚠ [track] 自定义路线失败，回退经典算法: {e}"));
-                        gen_track(
-                            params.dist,
-                            params.dur,
-                            params.seed,
-                            (anchor.latitude, anchor.longitude),
-                            start_ms,
-                            &pts_bd,
-                            params.track_color_mode,
-                        )
-                    }
-                }
-            }
-        }
+        gen_track(
+            params.dist,
+            params.dur,
+            params.seed,
+            (anchor.latitude, anchor.longitude),
+            start_ms,
+            &pts_bd,
+        )
     };
     if let Some(range) = params.manual_altitude_range {
         crate::track::altitude::override_bd_a_range(&mut track, range)?;
@@ -509,11 +474,7 @@ pub fn run_full_flow(
         target_dist: params.dist,
         target_dur: params.dur,
         points: sp.track.locations.len(),
-        route_mode: match params.route_mode {
-            RouteMode::Custom => "custom",
-            RouteMode::Legacy => "legacy",
-        }
-        .to_string(),
+        route_mode: "legacy".to_string(),
         seed: params.seed,
         realism_passed: true,
         obs_ok: None,
@@ -585,74 +546,9 @@ pub fn run_full_flow(
     })
 }
 
-/// 自定义路线轨迹生成（模式 C）：高德拉取闭环 → 距离/圈数换算 → 走点 → 吸附与告警。
-fn build_custom_track(
-    params: &RunParams,
-    must_bd: &[(f64, f64)],
-    pts_bd: &[(f64, f64)],
-    start_ms: i64,
-    log: &mut dyn FnMut(&str),
-) -> Result<crate::track::model::Track, String> {
-    let spec = params
-        .custom
-        .as_ref()
-        .filter(|s| s.is_valid())
-        .ok_or("自定义路线缺少起点/终点")?;
-    let key = params.amap_key.trim().to_string();
-    let ring = crate::amap::fetch_custom_ring(spec, &key)?;
-    log(&format!(
-        "√ [track] 高德路线：去程 {:.0} m · 闭环 {:.0} m · {} 点（{}）",
-        ring.leg_length_m,
-        ring.total_length_m,
-        ring.points_bd.len(),
-        if ring.loop_mode { "绕圈" } else { "单程" }
-    ));
-    let (d_eff, dur_eff, note) =
-        crate::track::custom::effective_dist_dur(spec, &ring, params.dist, params.dur)?;
-    log(&format!(
-        "[track] {note} → 距离 {:.0} m / {dur_eff}s",
-        d_eff
-    ));
-    let track =
-        crate::track::custom::build_custom(d_eff, dur_eff, params.seed, start_ms, &ring, pts_bd);
-    // 必经点告警：自定义路线不强制改道，必经点不在路线附近时提示可能不计成绩
-    for (i, &(mlat, mlon)) in must_bd.iter().enumerate() {
-        let mut best = f64::INFINITY;
-        for q in &track.locations {
-            let dd = ((q.gLat - mlat) * crate::track::geom::MET_PER_DEG_LAT).powi(2)
-                + ((q.gLng - mlon) * crate::track::geom::MET_PER_DEG_LNG).powi(2);
-            best = best.min(dd);
-        }
-        if best > 40.0 * 40.0 {
-            log(&format!(
-                "⚠ [track] 必经点[{i}] 不在自定义路线附近（最近 {:.0} m），本次可能不计入有效成绩",
-                best.sqrt()
-            ));
-        }
-    }
-    // 打卡点吸附统计
-    let mut snapped = 0usize;
-    for pl in pts_bd {
-        let mut best = f64::INFINITY;
-        for q in &track.locations {
-            let dd = ((q.gLat - pl.0) * crate::track::geom::MET_PER_DEG_LAT).powi(2)
-                + ((q.gLng - pl.1) * crate::track::geom::MET_PER_DEG_LNG).powi(2);
-            best = best.min(dd);
-        }
-        if best <= 40.0 * 40.0 {
-            snapped += 1;
-        }
-    }
-    log(&format!(
-        "[track] 打卡点吸附 {snapped}/{}（距路线 <40m 才会吸附）",
-        pts_bd.len()
-    ));
-    Ok(track)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{run_dry_run, RouteMode, RunParams};
+    use super::{run_dry_run, RunParams};
     use crate::location::Coordinate;
 
     fn params() -> RunParams {
@@ -663,12 +559,8 @@ mod tests {
             face_check: 1,
             manual_altitude: None,
             manual_altitude_range: None,
-            track_color_mode: crate::api::model::TrackColorMode::FullGreen,
             seed: 7,
-            route_mode: RouteMode::Legacy,
             track_spec: crate::track::stadium::TrackSpec::Auto,
-            custom: None,
-            amap_key: String::new(),
         }
     }
 

@@ -73,7 +73,7 @@ impl ShapedPlan {
         self.entry_m < 1.0 && self.exit_m < 1.0
     }
 
-    /// 把进场/离场段清零（自定义路线语义：起点就是用户填的路线起点）。
+    /// 把进场/离场段清零（起点即环线原点）。
     #[cfg_attr(not(test), allow(dead_code))] // 测试构造用
     pub fn without_access(&self) -> Self {
         Self {
@@ -206,7 +206,7 @@ impl ShapeTracker {
         &self.plan
     }
 
-    /// 环线原点坐标（自定义路线要用它做起点吸附）。
+    /// 环线原点坐标。
     pub fn ring_origin(&self) -> (f64, f64) {
         polyline_at(&self.dense, &self.arcs, self.s0)
     }

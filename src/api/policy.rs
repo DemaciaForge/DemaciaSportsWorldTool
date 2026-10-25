@@ -13,6 +13,7 @@ pub struct PolicyInfo {
     pub min_distance: i64,
     pub valid_time: i64,
     /// 必经点（BD 系，与打卡点同系），policy 响应里若有则返回。
+    #[allow(dead_code)] // 自定义路线删除后暂无读者；保留服务端必经点解析结果
     pub must_points: Vec<(f64, f64)>,
     /// 服务端可选的校园区域/绿色围栏元数据；没有配置时为自由跑默认值。
     pub area: crate::track::wire::RunAreaMeta,

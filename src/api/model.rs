@@ -13,22 +13,6 @@ pub const DISCOVERY: &str = "https://discovery.gxapp.iydsj.com";
 pub use crate::track::stadium::TrackSpec;
 /// 详情页路线颜色模式。
 ///
-/// 全绿色模式只生成官方详情页会识别为绿色的普通轨迹点；绿灰混合模式
-/// 保留原有的点类型和状态分布，便于需要兼容旧行为的用户使用。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TrackColorMode {
-    FullGreen,
-    #[serde(alias = "preserve_gray")]
-    HalfGreenGray,
-}
-
-impl Default for TrackColorMode {
-    fn default() -> Self {
-        Self::FullGreen
-    }
-}
-
 /// 登录态（session.json）。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Session {
@@ -86,42 +70,14 @@ pub struct Config {
     /// 跑步时将生成器海拔曲线映射到此范围；为空表示不使用范围覆盖。
     #[serde(default)]
     pub manual_altitude_range: Option<crate::track::altitude::AltitudeRange>,
-    /// 详情页路线颜色模式，缺省为全绿色。
-    #[serde(default)]
-    pub track_color_mode: TrackColorMode,
 
     /// 启动时检查更新：silent（静默，发现新版才弹窗）/ ask（每次询问）/ off
     #[serde(default = "default_update_check")]
     pub update_check: String,
-    /// 路线算法：legacy | custom。
-    #[serde(default = "default_route_mode")]
-    pub route_mode: String,
+
     /// Optional standard athletics-track preset; Auto preserves the legacy route.
     #[serde(default)]
     pub track_spec: TrackSpec,
-    /// 高德开放平台 Web 服务 Key（自定义路线用）。
-    #[serde(default)]
-    pub amap_key: String,
-    /// 自定义路线起点（地址或坐标）。
-    #[serde(default)]
-    pub custom_origin: String,
-    /// 自定义路线终点（地址或坐标）。
-    #[serde(default)]
-    pub custom_destination: String,
-    /// 自定义路线是否绕圈（A→B→A 闭环）。
-    #[serde(default = "default_custom_loop")]
-    pub custom_loop: bool,
-    /// 自定义路线圈数（0 = 按目标距离自动）。
-    #[serde(default)]
-    pub custom_laps: i64,
-}
-
-fn default_custom_loop() -> bool {
-    true
-}
-
-fn default_route_mode() -> String {
-    "legacy".into()
 }
 
 fn default_f32() -> f32 {
@@ -151,15 +107,8 @@ impl Default for Config {
             face_check: true,
             manual_altitude: None,
             manual_altitude_range: None,
-            track_color_mode: TrackColorMode::default(),
             update_check: default_update_check(),
-            route_mode: default_route_mode(),
             track_spec: TrackSpec::default(),
-            amap_key: String::new(),
-            custom_origin: String::new(),
-            custom_destination: String::new(),
-            custom_loop: default_custom_loop(),
-            custom_laps: 0,
         }
     }
 }
@@ -275,21 +224,6 @@ pub fn save_config(c: &Config) -> Result<(), String> {
 #[cfg(test)]
 mod storage_tests {
     use super::*;
-
-    #[test]
-    fn track_color_mode_defaults_to_full_green_and_round_trips() {
-        let default_config: Config = serde_json::from_str("{}").unwrap();
-        assert_eq!(default_config.track_color_mode, TrackColorMode::FullGreen);
-        let mixed: Config = serde_json::from_value(serde_json::json!({
-            "track_color_mode": "half_green_gray"
-        }))
-        .unwrap();
-        assert_eq!(mixed.track_color_mode, TrackColorMode::HalfGreenGray);
-        assert_eq!(
-            serde_json::to_value(&mixed).unwrap()["track_color_mode"],
-            "half_green_gray"
-        );
-    }
 
     #[test]
     fn android_identity_import_persists_brand_and_reuses_uuid() {
@@ -456,6 +390,7 @@ fn default_geo_fences_json() -> String {
 }
 
 /// 只返回与本次锚点相同的缓存。旧版未记录锚点的缓存会自然失效，避免串城市。
+#[cfg_attr(not(test), allow(dead_code))] // 仅测试使用
 pub fn load_points_cache_for(
     anchor: crate::location::Coordinate,
 ) -> Option<(i64, Vec<serde_json::Value>)> {

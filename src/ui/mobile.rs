@@ -191,6 +191,7 @@ fn numeric_control_shell<R>(
     )
 }
 
+#[cfg_attr(not(test), allow(dead_code))] // 暂无控件使用，保留供后续数值输入
 pub fn drag_i64(
     ui: &mut egui::Ui,
     id_source: impl Hash,

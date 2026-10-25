@@ -13,7 +13,6 @@ pub mod device;
 pub mod fonts;
 pub mod jobs;
 pub mod log;
-pub mod map;
 pub mod mobile;
 pub mod msgs;
 pub mod records;
@@ -39,7 +38,6 @@ pub const UPDATE_PROG: &str = "__UPDATE_PROG__";
 pub const UPDATE_DONE: &str = "__UPDATE_DONE__";
 pub const FENCE_DONE: &str = "__FENCE_DONE__";
 pub const POINTS_DONE: &str = "__POINTS_DONE__";
-pub const CUSTOM_ROUTE_DONE: &str = "__CUSTOM_ROUTE_DONE__";
 
 /// 提交结果弹窗。
 pub struct PopupInfo {
@@ -220,8 +218,8 @@ impl eframe::App for App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // 超链接但不用链接样式，纯文本观感
                     ui.hyperlink_to(
-                        egui::RichText::new("YanamiNeko").color(theme::text_dim()),
-                        "https://github.com/YanamiNeko",
+                        egui::RichText::new("DemaciaForge").color(theme::text_dim()),
+                        "https://github.com/DemaciaForge",
                     );
                     ui.label(egui::RichText::new("Powered by").color(theme::text_dim()));
                     ui.separator();
@@ -337,23 +335,12 @@ impl App {
                     .unwrap_or_default(),
                 face_check: config.face_check,
                 plan: None,
-                route_mode: crate::track::RouteMode::from_str(&config.route_mode),
                 track_spec: config.track_spec,
                 custom_track_length: match config.track_spec {
                     crate::track::stadium::TrackSpec::Custom { total_m } => total_m.to_string(),
                     _ => "400".into(),
                 },
-                track_color_mode: config.track_color_mode,
-                map: map::MapState::default(),
                 preview_stale: true,
-                map_fitted: false,
-                custom_origin: config.custom_origin.clone(),
-                custom_destination: config.custom_destination.clone(),
-                custom_loop: config.custom_loop,
-                custom_laps: config.custom_laps,
-                amap_key: config.amap_key.clone(),
-                custom_preview: None,
-                custom_status: String::new(),
             },
 
             records_page: records::RecordsPage::default(),

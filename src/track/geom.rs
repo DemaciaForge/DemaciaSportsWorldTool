@@ -45,20 +45,6 @@ impl Rng {
     {
         items[rand::Rng::gen_range(&mut self.inner, 0..items.len())]
     }
-    pub fn weighted<T>(&mut self, items: &[(T, u32)]) -> T
-    where
-        T: Copy,
-    {
-        let total: u32 = items.iter().map(|(_, w)| *w).sum();
-        let mut u = self.uniform(0.0, total as f64);
-        for (item, w) in items {
-            u -= *w as f64;
-            if u < 0.0 {
-                return *item;
-            }
-        }
-        items[items.len() - 1].0
-    }
 }
 
 /// 打卡点 BD 系 (lat, lng) → 闭合平面路径 + 弧长表 + 中心。
@@ -110,7 +96,7 @@ pub fn make_point_ring(bd_points: &[(f64, f64)]) -> PointRing {
 }
 
 /// 环线弧长 → 坐标（线性插值）。
-#[cfg_attr(not(test), allow(dead_code))] // 自定义路线/跑道按弧长取点，测试在用
+#[cfg_attr(not(test), allow(dead_code))] // 跑道按弧长取点，测试在用
 pub fn ring_point_at(dense: &[(f64, f64)], arcs: &[f64], s: f64) -> (f64, f64) {
     let total = *arcs.last().unwrap_or(&1.0);
     let s = s.rem_euclid(total);
