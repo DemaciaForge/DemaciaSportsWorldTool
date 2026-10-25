@@ -200,6 +200,13 @@ pub fn run_full_flow(
     let pol = fetch_policy(client)?;
     // 冻结期门禁：真实客户端在 freezeRunTime > 0 时禁用开始按钮，账号在冻结期内
     // 不会有任何跑步提交。这里必须在生成轨迹、拉点位、上传 OBS 之前就拦住。
+    log(&format!(
+        "OK [policy] target {}m | mode {} (sequenceRule={} strength={})",
+        pol.min_distance,
+        pol.sequence_mode(),
+        pol.sequence_rule,
+        pol.sequence_strength
+    ));
     if let Some(secs) = pol.frozen_for_secs() {
         log(&format!(
             "× [policy] 跑步冻结剩余 {secs} 秒（freezeRunTime={secs}）"

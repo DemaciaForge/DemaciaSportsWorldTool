@@ -28,6 +28,16 @@ pub struct PolicyInfo {
     pub freeze_run_time: i64,
     /// 服务端随策略下发的提示文案（`RandomConfigBean.message`）。
     pub message: String,
+    /// 点位顺序规则：0 = 随机点位模式（不强制顺序），非 0 = 顺序跑。
+    ///
+    /// 对应 `RunRuleModel.sequenceRule`。官方完成条件：
+    ///   - 未开启顺序跑：经过必经点位 + 至少 2 个普通点位 + 达到目标里程
+    ///   - 已开启顺序跑：按点位顺序跑完显示的所有点位 + 达到目标里程
+    ///
+    /// 界面上「有没有点位序号」是这条规则的直接体现。
+    pub sequence_rule: i64,
+    /// 顺序强度（`RunRuleModel.sequenceStrength`）。
+    pub sequence_strength: i64,
     /// 服务端可选的校园区域/绿色围栏元数据；没有配置时为自由跑默认值。
     pub area: crate::track::wire::RunAreaMeta,
 }
@@ -40,6 +50,15 @@ impl PolicyInfo {
     /// 必须自己拦：否则服务端会看到「封禁账号仍在提交跑步记录」。
     pub fn frozen_for_secs(&self) -> Option<i64> {
         (self.freeze_run_time > 0).then_some(self.freeze_run_time)
+    }
+
+    /// 点位顺序模式的文字描述，供日志直接判断。
+    pub fn sequence_mode(&self) -> &'static str {
+        if self.sequence_rule != 0 {
+            "顺序跑（须按点位顺序跑完全部点位）"
+        } else {
+            "随机点位（不强制顺序）"
+        }
     }
 
     /// 冻结期内拒绝提交时给出的完整提示。
@@ -93,6 +112,14 @@ pub(crate) fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
             .and_then(|t| t.as_str())
             .unwrap_or_default()
             .to_string(),
+        sequence_rule: rule
+            .get("sequenceRule")
+            .and_then(|t| t.as_i64())
+            .unwrap_or(0),
+        sequence_strength: rule
+            .get("sequenceStrength")
+            .and_then(|t| t.as_i64())
+            .unwrap_or(0),
         must_points: extract_must_points(biz),
         area: super::points::area_from_payload(biz, &[]),
     })
@@ -218,6 +245,24 @@ mod freeze_tests {
     }
 
     /// `freezeRunTime` 也兼容放在 runRuleModel 里的版本。
+    #[test]
+    fn sequence_rule_is_read_from_run_rule_model() {
+        let mut v = base();
+        // 默认缺失 -> 0（随机点位模式）
+        assert_eq!(parse_policy_response(&v).unwrap().sequence_rule, 0);
+        assert!(parse_policy_response(&v)
+            .unwrap()
+            .sequence_mode()
+            .contains("随机点位"));
+
+        v["runRuleModel"]["sequenceRule"] = json!(1);
+        v["runRuleModel"]["sequenceStrength"] = json!(1);
+        let p = parse_policy_response(&v).unwrap();
+        assert_eq!(p.sequence_rule, 1);
+        assert_eq!(p.sequence_strength, 1);
+        assert!(p.sequence_mode().contains("顺序跑"));
+    }
+
     #[test]
     fn freeze_read_from_run_rule_model_fallback() {
         let mut v = base();

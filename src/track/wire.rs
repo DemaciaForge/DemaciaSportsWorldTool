@@ -174,14 +174,16 @@ pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
     })
 }
 
-/// 五点实体（实时点位 → 跑完态 isPass=true）。
+/// 五点实体（实时点位 → 跑完态 `isPass=true`）。
 ///
-/// 已通过的点**一律标 `isFixed=1`**。真实 App 跑完后的详情页是 5 个绿色打勾
-/// 点位，`isFixed=0` 会显示成橙色——那是「未跑完/普通点」的形态，不是完成态。
+/// `isFixed` **保留服务端下发的原值**，不做任何改写：
+///   - `isFixed=1` = 必经点位（地图上黄色）
+///   - `isFixed=0` = 普通点位（地图上蓝色）
 ///
-/// 「至少通过 2 个普通点位」（`reasonList` type 3）由服务端按点位自身的固有属性
-/// 与轨迹是否真的经过来判定，不依赖提交时声称的 `isFixed`。曾为凑这条规则把 2 个
-/// 点降成 `isFixed=0`，结果是详情页出现 2 绿 3 橙，与真实跑步形态不符。
+/// 「已通过」由 `isPass=true` 表达——官方详情页据此把点画成绿色圆框打勾，与
+/// `isFixed` 是**两个独立维度**。曾两次搞错这个区分：一次把所有点标 1（服务端
+/// 数出 0 个普通点，type 3 无处可依），一次把 2 个点降成 0（详情页出现橙点）。
+/// 「至少通过 2 个普通点位」依赖服务端能从载荷里认出哪些是普通点。
 pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
     points
         .iter()
@@ -193,7 +195,8 @@ pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
                 "glon": p["glon"].as_f64().unwrap_or(0.0),
                 "id": i as i64 + 1,
                 // 跑完态：本次命中的打卡点全部标为固定点（详情页显示绿色打勾）。
-                "isFixed": 1,
+                // 原样回传服务端标记：改写会让「必经/普通」分类与地图颜色失真。
+                "isFixed": p.get("isFixed").and_then(|v| v.as_i64()).unwrap_or(1),
                 "isPass": true,
                 "lat": p["lat"].as_f64().unwrap_or(0.0),
                 "lon": p["lon"].as_f64().unwrap_or(0.0),
@@ -205,14 +208,11 @@ pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
         .collect()
 }
 
-/// 统计点位里的普通点（服务端标为 `isFixed=0` 的非起点点位）数量。
-///
-/// 提交载荷会把它们全部改成 1，这个计数只用于日志说明「本次经过了几个普通点」。
+/// 统计点位里的普通点（服务端标为 `isFixed=0`）数量，供日志说明。
 pub fn ordinary_point_count(points: &[Value]) -> usize {
     points
         .iter()
-        .enumerate()
-        .filter(|(i, p)| *i > 0 && p.get("isFixed").and_then(|v| v.as_i64()).unwrap_or(0) == 0)
+        .filter(|p| p.get("isFixed").and_then(|v| v.as_i64()).unwrap_or(0) == 0)
         .count()
 }
 
@@ -426,7 +426,8 @@ mod validation_tests {
             serde_json::from_str(&five_point_wrapper(&points, 1_700_000_000_000)).unwrap();
         let raw = value["fivePointJson"].as_str().unwrap();
         let fixed: Value = serde_json::from_str(raw).unwrap();
-        assert_eq!(fixed[0]["isFixed"], 1);
+        // isFixed 原样传回（这里服务端给的是 0），isPass 才表示已通过
+        assert_eq!(fixed[0]["isFixed"], 0);
         assert_eq!(fixed[0]["isPass"], true);
     }
 
@@ -461,11 +462,11 @@ mod validation_tests {
     /// `isFixed=0` 在官方详情页显示为橙色，是「未跑完/普通点」的形态。曾为凑
     /// 「至少通过 2 个普通点位」把 2 个点降成 0，结果出现 2 绿 3 橙，与真实
     /// 跑完记录不符。
+    /// `isFixed` 原样回传：服务端的「必经/普通」分类不能被改写。
     #[test]
-    fn completed_payload_marks_every_point_fixed() {
+    fn completed_payload_preserves_server_fixed_flags() {
         let pts = points_with_flags(&[1, 0, 0, 0, 0]);
-        assert_eq!(payload_flags(&pts), vec![1, 1, 1, 1, 1]);
-        // 普通点计数仍按服务端原始标记统计，仅用于日志
+        assert_eq!(payload_flags(&pts), vec![1, 0, 0, 0, 0]);
         assert_eq!(ordinary_point_count(&pts), 4);
     }
 
@@ -476,11 +477,12 @@ mod validation_tests {
         assert_eq!(ordinary_point_count(&pts), 0);
     }
 
+    /// `isPass` 独立于 `isFixed`：已通过才算跑完，与颜色无关。
     #[test]
-    fn completed_payload_fixes_the_start_point_too() {
-        // 起点即便服务端标 0 也必须是 1
-        let pts = points_with_flags(&[0, 0, 0]);
-        assert_eq!(payload_flags(&pts), vec![1, 1, 1]);
+    fn completed_payload_marks_every_point_passed() {
+        let pts = points_with_flags(&[1, 0, 0]);
+        let payload = five_point_payload(&pts, 1_700_000_000_000);
+        assert!(payload.iter().all(|p| p["isPass"] == true));
     }
 
     #[test]
@@ -588,14 +590,20 @@ mod validation_tests {
                 );
             }
             let five = gaps.iter().filter(|g| **g == 5).count() as f64 / gaps.len() as f64;
+            // 真机定位回调严格 5 s 一拍（10 条真实记录的中位数与 P90 都是 5 s），
+            // 只在丢点时出现 10/15 s。不该有 1–4 s 的「加密采样」。
             assert!(
-                (0.55..=0.92).contains(&five),
-                "seed={seed}: 5 s 间隔占比 {:.0}%",
+                five >= 0.88,
+                "seed={seed}: 5 s 间隔占比 {:.0}%，应接近 100%",
                 five * 100.0
             );
             assert!(
-                gaps.iter().any(|g| *g <= 2),
-                "seed={seed}: 缺少 1–2 s 加密采样"
+                gaps.iter().all(|g| !(1..=4).contains(g)),
+                "seed={seed}: 出现 1–4 s 间隔，与真机 5 s 节拍不符"
+            );
+            assert!(
+                gaps.iter().any(|g| *g >= 10),
+                "seed={seed}: 完全没有丢点（10/15 s 间隔）"
             );
         }
     }

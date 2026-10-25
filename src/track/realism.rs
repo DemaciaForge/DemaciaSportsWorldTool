@@ -771,23 +771,60 @@ impl LaneTracker {
 ///
 /// 短间隔不是噪声而是真机行为：定位回调在信号好时会加密到 1–2 s（实测一次 918 s
 /// 的记录里 1 s 间隔出现 7 次、2 s 出现 6 次）。清一色 5 s 反而是机器特征。
+/// 定位采样网格：固定 5 秒一拍，偶发丢点。
+///
+/// 实测量自 10 条真实记录（`real/obs_*.json`，2–4 km）：
+///   - `totalTime` 差分中位数 **全部是 5 秒**，均值 4.7–5.0
+///   - P90 也是 5 秒，说明绝大多数拍点都是严格的 5 s
+///   - 最大间隔 11–15 s，即偶尔丢 1–2 拍（5→15 s）
+///
+/// 旧实现只有 80% 落在 5 秒，其余在 1/2/3/4/6/7/8 秒里随机抖——服务端看
+/// 逐点 `totalTime` 就是「采样不规律」，与真机的定位回调节奏对不上。
 pub fn sample_grid(dur_s: f64, rng: &mut Rng) -> (Vec<f64>, Vec<f64>) {
     let mut times = Vec::new();
     let mut t = 0.0;
+    let mut prev_gap = 5.0f64;
+    // 第一拍不能丢：开跑那一刻一定有定位，否则首个 10 s 窗口只剩几米。
+    times.push(0.0);
+    t += 5.0;
+    // 前两拍都不能丢：首点与起点哨兵同在 t=0，
+    // 真正上路的第一个采样点是 times[2]，它也必须是 5 s。
+    times.push(t);
+    t += 5.0;
     while t < dur_s - 1.0 {
         times.push(t);
-        t += if rng.random() < 0.80 {
-            5.0
-        } else {
-            rng.choice(&[1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0])
+        // 真机定位回调严格 5 s 一次；约 4% 的拍点因定位失败被丢弃，
+        // 于是下一拍的间隔变成 10 s（丢 1 拍）或 15 s（丢 2 拍）。
+        // 实测 10 条真实记录的最大间隔是 15 s（即最多连丢 2 拍），
+        // 没出现过 20 s。连续丢拍需要额外限制。
+        let step = match rng.random() {
+            u if u < 0.028 => 15.0,
+            u if u < 0.070 => 10.0,
+            _ => 5.0,
         };
+        // 上一拍已经丢了 2 拍（间隔 15 s）时，下一拍必须正常，
+        // 否则会拼出超过 15 s 的间隔。
+        t += if prev_gap >= 15.0 { 5.0 } else { step };
+        prev_gap = if prev_gap >= 15.0 { 5.0 } else { step };
     }
     if times.is_empty() {
         times.push(0.0);
     }
-    // 末点必须正好落在 `dur_s` 上：提交体的 stopTime = startTime + totalTime。
-    if (*times.last().unwrap() - dur_s).abs() > 0.5 {
-        times.push(dur_s);
+    // 末点落在 `dur_s` 上：提交体的 stopTime = startTime + totalTime。
+    //
+    // 关键：不能直接 push 一个 `dur_s`，否则末尾会多出 1–4 s 的残余间隔，
+    // 与真机「固定 5 s 拍点」的节拍对不上。这里把末点并入上一拍（拉平到
+    // `dur_s`），或者按整 5 s 拍补齐后再拉平。
+    if let Some(last) = times.last_mut() {
+        let gap = dur_s - *last;
+        if gap.abs() > 0.5 {
+            if gap < 5.0 {
+                // 剩余不足一拍：把末点就当作结束时刻
+                *last = dur_s;
+            } else {
+                times.push(dur_s);
+            }
+        }
     }
     let n = times.len();
     // `dts[i]` = 「从 i-1 到 i」的时长，因此 `dts[0] = 0`（首点没有前驱）。
