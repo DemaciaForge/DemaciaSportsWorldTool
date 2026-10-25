@@ -9,7 +9,7 @@
 use crate::api::client::{make_agent, ureq_err};
 
 /// 分发仓库。GitHub 上把仓库改名后只需改这一处。
-pub const REPO: &str = "DemaciaForge/NekoSportsWorldTool";
+pub const REPO: &str = "DemaciaForge/DemaciaSportsWorldTool";
 
 const UA: &str = concat!("DemaciaSportsWorldTool/", env!("CARGO_PKG_VERSION"));
 
