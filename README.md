@@ -7,6 +7,10 @@
 
 改造依据与代码事实记录在 [docs/REALISM_FINDINGS_zh.md](docs/REALISM_FINDINGS_zh.md)。
 
+## 界面
+
+<img src="docs/screenshot.png" width="620" alt="GUI">
+
 ---
 
 ## 相对上游的主要改动
