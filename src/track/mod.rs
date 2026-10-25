@@ -7,6 +7,7 @@ pub mod generate_road;
 pub mod generator;
 pub mod geom;
 pub mod model;
+pub mod pace;
 pub mod postfix;
 pub mod realism;
 pub mod shape;

@@ -207,6 +207,8 @@ fn cmd_run(rest: &[&str]) -> i32 {
     let params = crate::api::flow::RunParams {
         dist,
         dur,
+        // `--pace` 给了就是显式指定：越出学校窗口要报错，不能静默改时长。
+        explicit_pace: pace > 0.0,
         start_ms,
         face_check: face as i64,
         manual_altitude,

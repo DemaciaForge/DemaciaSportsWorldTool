@@ -46,6 +46,7 @@ pub const UPDATE_PROG: &str = "__UPDATE_PROG__";
 pub const UPDATE_DONE: &str = "__UPDATE_DONE__";
 pub const FENCE_DONE: &str = "__FENCE_DONE__";
 pub const POINTS_DONE: &str = "__POINTS_DONE__";
+pub const SCHOOL_PACE: &str = "__SCHOOL_PACE__";
 pub const CUSTOM_ROUTE_DONE: &str = "__CUSTOM_ROUTE_DONE__";
 
 /// 提交结果弹窗。
@@ -351,6 +352,8 @@ impl App {
                 dist_max: config.dist_max,
                 pace_min: config.pace_min,
                 pace_max: config.pace_max,
+                // 进入页面时先不填；点「读取学校配速」后由策略响应填入。
+                school_pace: None,
                 manual_altitude: config
                     .manual_altitude_range
                     .map(|r| format!("{}-{}", r.min_m, r.max_m))

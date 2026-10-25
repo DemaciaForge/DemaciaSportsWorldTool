@@ -1,4 +1,4 @@
-﻿//! 自定义路线轨迹生成器（模式 C）。
+//! 自定义路线轨迹生成器（模式 C）。
 //!
 //! 几何源为高德步行路线（gcj02 → BD-09 对齐打卡点后走点）：
 //! - 单程：A→B 一条腿；
@@ -129,10 +129,11 @@ pub fn build_custom(
     start_ms: i64,
     ring: &CustomRing,
     snap_points_bd: &[(f64, f64)],
+    pace: crate::track::pace::PaceWindow,
 ) -> Track {
     let mut rng = Rng::new(seed);
     let site = custom_site_ring(ring);
-    let (times, dts, speeds) = speed_profile(dist, dur as f64, &mut rng);
+    let (times, dts, speeds) = speed_profile(dist, dur as f64, &mut rng, pace);
     // 路线点本身算出的周长才是「跑几圈」的依据；客户端给的 total_length_m 只兜底。
     let loop_m = site.ring_m;
     assemble(Assembly {
@@ -150,6 +151,7 @@ pub fn build_custom(
         start_at_ring_origin: true,
         rng,
         loop_m: Some(loop_m),
+        pace,
     })
 }
 
@@ -203,6 +205,9 @@ pub fn custom_site_ring(ring: &CustomRing) -> SiteRing {
 mod tests {
     use super::*;
 
+    /// 测试统一用一个宽松的配速窗口，避免各用例被学校规则耦合。
+    const TEST_PACE: crate::track::pace::PaceWindow = crate::track::pace::PaceWindow::FALLBACK;
+
     fn sample_ring() -> CustomRing {
         // 校园内一个 1km 左右的闭环（BD-09，与打卡点同系）
         let c = (38.90f64, 121.54f64);
@@ -234,6 +239,7 @@ mod tests {
             1_788_958_186_123,
             &ring,
             &sample_checkpoints(),
+            TEST_PACE,
         );
         assert!(
             (track.totalDistance / 2200.0 - 1.0).abs() < 0.03,
@@ -262,7 +268,7 @@ mod tests {
     #[test]
     fn test_start_is_ring_origin() {
         let ring = sample_ring();
-        let track = build_custom(1200.0, 480, 3, 1_788_958_186_123, &ring, &[]);
+        let track = build_custom(1200.0, 480, 3, 1_788_958_186_123, &ring, &[], TEST_PACE);
         let first = &track.locations[0];
         let (want_lat, want_lng) = ring.points_bd[0];
         let d = ((first.gLat - want_lat) * MET_PER_DEG_LAT).powi(2)
@@ -321,7 +327,7 @@ mod tests {
     fn test_custom_speeds_within_window() {
         let ring = sample_ring();
         for seed in 0..8u64 {
-            let t = build_custom(2100.0, 900, seed, 1_788_958_186_123, &ring, &[]);
+            let t = build_custom(2100.0, 900, seed, 1_788_958_186_123, &ring, &[], TEST_PACE);
             for (i, w) in t.speedPerTenSec.iter().enumerate() {
                 let pace = 1000.0 / (w.value / 10.0);
                 let ceil = if i == 0 { 1200.0 } else { 600.0 };

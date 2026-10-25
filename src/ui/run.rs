@@ -67,6 +67,10 @@ pub struct RunPage {
     pub dist_max: f32,
     pub pace_min: f32,
     pub pace_max: f32,
+    /// 学校规定的配速范围（秒/公里，快–慢）；`None` = 尚未读取。
+    ///
+    /// 由 `refresh_school_pace` 填入。用户可以在区间内修改，越界时界面会拦截。
+    pub school_pace: Option<(f32, f32)>,
     /// 手动绝对海拔（米）；空白表示使用生成器默认海拔。
     pub manual_altitude: String,
     /// 0=随机时刻 1=指定时刻
@@ -291,6 +295,7 @@ impl App {
     fn draw_run_content(&mut self, ui: &mut egui::Ui) {
         let prev_route = self.run_page.route_mode;
         let mut custom_fetch_wanted = false;
+        let mut school_pace_wanted = false;
         {
             let page = &mut self.run_page;
             let compact = mobile::compact_ui(ui);
@@ -353,6 +358,40 @@ impl App {
                     ui.label("配速范围（秒/km）：");
                     draw_pace_inputs(ui);
                 });
+            }
+            // 配速范围是**学校规定**的：先读出来填进去，学生只能在这个区间内改。
+            let fmt_p = |s: f32| format!("{}′{:02}″", (s as i64) / 60, (s as i64) % 60);
+            match page.school_pace {
+                None => {
+                    if ui.button("读取学校配速").clicked() {
+                        school_pace_wanted = true;
+                    }
+                }
+                Some((fast, slow)) => {
+                    let lo = page.pace_min.min(page.pace_max);
+                    let hi = page.pace_min.max(page.pace_max);
+                    if lo < fast - 0.5 || hi > slow + 0.5 {
+                        ui.colored_label(
+                            theme::err(),
+                            format!(
+                                "✗ 配速 {}–{} 超出学校规定 {}–{}，请改回范围内",
+                                fmt_p(lo),
+                                fmt_p(hi),
+                                fmt_p(fast),
+                                fmt_p(slow)
+                            ),
+                        );
+                    } else {
+                        ui.colored_label(
+                            theme::text_dim(),
+                            format!(
+                                "学校规定 {}–{}（可在此范围内修改）",
+                                fmt_p(fast),
+                                fmt_p(slow)
+                            ),
+                        );
+                    }
+                }
             }
             mobile::row(ui, |ui| {
                 ui.label("手动海拔（米/区间）：");
@@ -564,6 +603,9 @@ impl App {
         }
         if custom_fetch_wanted {
             self.refresh_custom_route();
+        }
+        if school_pace_wanted {
+            self.refresh_school_pace();
         }
 
         // 切换到真实道路路由时按需拉取电子围栏与实时点位（经典模式不触发这些端点）。
@@ -1089,6 +1131,8 @@ impl App {
             let params = crate::api::flow::RunParams {
                 dist,
                 dur,
+                // GUI 的配速来自用户可见的配速区间，越出学校窗口应报错让他改。
+                explicit_pace: true,
                 start_ms,
                 face_check,
                 manual_altitude,
