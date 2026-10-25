@@ -51,7 +51,8 @@
   - 路线颜色固定全绿色
 - **数据**：学期完成度、违规自查、排行榜（个人 / 班级 / 院系 × 日 / 月、室内榜、历史榜）
 - **登录**：人机验证本地自动通过，会话失效自动重登
-- **自动更新**：检查 / 下载 / 自替换并重启；启动检查模式可选（静默 / 询问 / 关闭）
+- **自动更新**：检查 / 下载 / 自替换并重启；启动检查模式可选（静默 / 询问 / 关闭）。
+  详见 [检查更新](#检查更新)
 
 界面共 7 个标签页：跑步 · 运动记录 · 数据 · 我的 · 设备信息 · 运行日志 · 关于。
 
@@ -117,6 +118,38 @@ demaciasportsworldtool help                      # 全部命令
 - 留空 → 自动海拔
 - 单个数字（如 `17.2`）→ 所有轨迹点使用固定海拔
 - 区间（如 `11.6-22.8`）→ 把生成的海拔曲线映射到该区间，保留相对起伏
+
+### 检查更新
+
+界面**最下方**有「检查更新」按钮，右侧显示当前版本号。检查结果直接显示在左下角状态栏
+（`已是最新版本` / `发现新版本 vX.Y.Z` / `检查更新失败…`）。
+
+**启动时**也可自动检查，`config.json` 的 `update_check` 有三种取值：
+
+| 值 | 行为 |
+|---|---|
+| `silent`（默认） | 静默检查，只有发现新版本才弹窗 |
+| `ask` | 每次启动询问 |
+| `off` | 完全不检查 |
+
+更新源是 `api.github.com/repos/DemaciaForge/DemaciaSportsWorldTool/releases/latest`，
+**匿名请求**，不携带账号令牌。因此本仓库必须保持 **public**，否则匿名读不到发布信息。
+
+各平台对应的发布资产名是固定的，改名会导致更新失败：
+
+| 平台 | 资产名 |
+|---|---|
+| Windows x86_64 | `DemaciaSportsWorldTool-win-x64.zip` |
+| macOS arm64 | `DemaciaSportsWorldTool-macos-arm64.tar.gz` |
+| Linux x86_64 | `DemaciaSportsWorldTool-linux-x64.tar.gz` |
+| Linux aarch64 | `DemaciaSportsWorldTool-linux-aarch64.tar.gz` |
+
+桌面端会从 zip 里找 `*.exe`（打包带 `target/` 路径也能识别），下载后自替换并重启。
+网络不通时可到 [Releases](https://github.com/DemaciaForge/DemaciaSportsWorldTool/releases)
+手动下载：退出程序，用新的 `demaciasportsworldtool.exe` 覆盖旧的，**保留**
+`config.json`、`identity.json`、`points_cache.json` 等数据文件。
+
+调试时可用环境变量 `NSWT_UPDATE_REPO` 临时指向别的仓库（如自己的测试 fork）。
 
 ### 青龙定时任务
 
