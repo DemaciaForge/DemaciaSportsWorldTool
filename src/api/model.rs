@@ -481,6 +481,46 @@ pub fn load_points_cache_context_for(
     Some((cache.ts, cache.points, area))
 }
 
+/// 从点位缓存里取围栏多边形，作为独立围栏接口失败时的兜底。
+///
+/// 复用 `points_cache.json`——它已经存了 `geo_fences_json`（提交成功时用漂移后的
+/// 新锚点重存过），不需要再单独维护一个围栏缓存文件。
+///
+/// 锚点容差比点位缓存（0.0001 度 ≈ 11 m）宽得多：围栏是**学校级边界**，不需要
+/// 逐点吻合；而锚点每次提交都会随机漂移约 120 m 并持久化，用点位那套容差几乎
+/// 必然失配。取 0.02 度（≈ 2.2 km）——够容忍长期累积的漂移，又能挡住"换了校区
+/// 却拿旧围栏摆正"这种更糟的情况。
+pub fn load_fence_cache_for(
+    anchor: crate::location::Coordinate,
+) -> Option<(i64, Vec<Vec<(f64, f64)>>)> {
+    let v: serde_json::Value = read_json("points_cache.json")?;
+    fences_from_cache_value(&v, anchor)
+}
+
+/// [`load_fence_cache_for`] 的纯判定部分：给定缓存 JSON 与当前锚点，取出围栏。
+///
+/// 拆出来是为了能脱离磁盘测试锚点容差与各项拒绝条件。
+fn fences_from_cache_value(
+    value: &serde_json::Value,
+    anchor: crate::location::Coordinate,
+) -> Option<(i64, Vec<Vec<(f64, f64)>>)> {
+    let cache: PointsCache = serde_json::from_value(value.clone()).ok()?;
+    if cache.checkpoint_schema != 1 {
+        return None;
+    }
+    if !cache.anchor.is_near(anchor, FENCE_CACHE_TOLERANCE_DEG) {
+        return None;
+    }
+    if !cache.freedom_show_fence {
+        return None;
+    }
+    let fences = crate::api::fence::parse_fences_json(&cache.geo_fences_json);
+    (!fences.is_empty()).then_some((cache.ts, fences))
+}
+
+/// 围栏缓存的锚点容差（度）：≈ 2.2 km。理由见 [`load_fence_cache_for`]。
+const FENCE_CACHE_TOLERANCE_DEG: f64 = 0.02;
+
 #[allow(dead_code)]
 pub fn save_points_cache(
     anchor: crate::location::Coordinate,
@@ -504,6 +544,85 @@ pub fn save_points_cache_context(
         freedom_show_fence: area.freedom_show_fence,
     };
     write_json("points_cache.json", &doc)
+}
+
+#[cfg(test)]
+mod fence_cache_tests {
+    use super::fences_from_cache_value;
+    use crate::location::Coordinate;
+    use serde_json::json;
+
+    /// 一份带围栏的缓存（锚点 38.9, 121.54）。
+    fn cache(anchor: (f64, f64), freedom: bool, fences: serde_json::Value) -> serde_json::Value {
+        json!({
+            "checkpoint_schema": 1,
+            "ts": 1_700_000_000_000i64,
+            "anchor": { "latitude": anchor.0, "longitude": anchor.1 },
+            "points": [],
+            "run_area_id": 12,
+            "geo_fences_json": fences.to_string(),
+            "freedom_show_fence": freedom,
+        })
+    }
+
+    fn square() -> serde_json::Value {
+        json!([{ "id": 1, "points": [
+            {"lat": 38.90, "lng": 121.54},
+            {"lat": 38.90, "lng": 121.55},
+            {"lat": 38.91, "lng": 121.55},
+            {"lat": 38.91, "lng": 121.54}
+        ]}])
+    }
+
+    fn at(lat: f64, lng: f64) -> Coordinate {
+        Coordinate::new(lat, lng, 0.0).unwrap()
+    }
+
+    #[test]
+    fn same_anchor_yields_fences() {
+        let v = cache((38.9, 121.54), true, square());
+        let (ts, rings) = fences_from_cache_value(&v, at(38.9, 121.54)).expect("同锚点应命中");
+        assert_eq!(ts, 1_700_000_000_000);
+        assert_eq!(rings.len(), 1);
+        assert_eq!(rings[0].len(), 4);
+    }
+
+    /// 锚点漂移是设计行为（每次提交约 120 m），小幅漂移必须仍然命中。
+    #[test]
+    fn small_anchor_drift_still_hits() {
+        let v = cache((38.9, 121.54), true, square());
+        // 约 1 km 偏移（0.009 度）仍在 0.02 度容差内
+        assert!(fences_from_cache_value(&v, at(38.909, 121.549)).is_some());
+    }
+
+    /// 换了校区（超出容差）就不能再拿旧围栏摆正——宁可用不上。
+    #[test]
+    fn distant_anchor_is_rejected() {
+        let v = cache((38.9, 121.54), true, square());
+        assert!(
+            fences_from_cache_value(&v, at(39.5, 122.1)).is_none(),
+            "跨校区不应复用旧围栏"
+        );
+    }
+
+    #[test]
+    fn freedom_disabled_or_empty_fences_are_rejected() {
+        let off = cache((38.9, 121.54), false, square());
+        assert!(fences_from_cache_value(&off, at(38.9, 121.54)).is_none());
+
+        let empty = cache((38.9, 121.54), true, json!([]));
+        assert!(fences_from_cache_value(&empty, at(38.9, 121.54)).is_none());
+    }
+
+    #[test]
+    fn old_schema_is_rejected() {
+        let mut v = cache((38.9, 121.54), true, square());
+        v["checkpoint_schema"] = json!(0);
+        assert!(
+            fences_from_cache_value(&v, at(38.9, 121.54)).is_none(),
+            "旧版缓存可能含错误点位，必须拒绝"
+        );
+    }
 }
 
 #[cfg(test)]

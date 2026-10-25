@@ -228,10 +228,28 @@ pub fn run_full_flow(
     } else if area.run_area_id < 0 && pol.area.run_area_id >= 0 {
         area.run_area_id = pol.area.run_area_id;
     }
-    // 某些学校不在策略/点位响应中返回围栏，而是只由独立围栏接口提供。
-    // 围栏是可选能力：接口失败或返回空数组时继续按自由跑提交。
-    let mut prefetched_fences: Option<Vec<Vec<(f64, f64)>>> = None;
-    if !area.freedom_show_fence || area.geo_fences_json.trim() == "[]" {
+    // 围栏来源优先级：策略内嵌 > 独立接口 > 点位缓存兜底。
+    //
+    // 跑道摆正要用围栏（真实操场的直道顺着场地长边铺），所以三条来源都要走到；
+    // 原来的写法只在「策略没给围栏」时才调独立接口，导致策略自带围栏的学校
+    // 反而拿不到围栏来摆正——这里一并修掉。
+    //
+    // 三者都拿不到时 `layout_fences` 为空，跑道退化为纯几何拟合（轨迹仍合法）。
+    let mut layout_fences: Vec<Vec<(f64, f64)>> = if area.freedom_show_fence {
+        crate::api::fence::parse_fences_json(&area.geo_fences_json)
+    } else {
+        Vec::new()
+    };
+    if !layout_fences.is_empty() {
+        log(&format!(
+            "√ [fence] 策略内嵌围栏 {} 个",
+            layout_fences.len()
+        ));
+    }
+
+    // 策略没给（或给了但解析不出多边形）时才请求独立接口；成功即由提交末尾的
+    // save_points_cache_context 连同 area 一起落盘，供下次接口故障时兜底。
+    if layout_fences.is_empty() {
         match crate::api::fence::fetch_geo_fence_with_area(client) {
             Ok(response) => {
                 if response.area.freedom_show_fence && response.area.geo_fences_json.trim() != "[]"
@@ -245,14 +263,26 @@ pub fn run_full_flow(
                 } else {
                     log("[fence] 独立接口未返回可用围栏，继续自由跑");
                 }
-                prefetched_fences = Some(response.polygons);
+                layout_fences = response.polygons;
             }
-            Err(e) => log(&format!("⚠ [fence] 独立接口获取失败，继续自由跑: {e}")),
+            Err(e) => log(&format!("⚠ [fence] 独立接口获取失败: {e}")),
         }
     }
-    // 跑道摆正用的围栏副本：真实操场的直道顺着场地长边铺，围栏就是场地边界。
-    // 这里只做一次 clone，不额外发请求——没有围栏时退化为纯几何拟合。
-    let layout_fences: Vec<Vec<(f64, f64)>> = prefetched_fences.clone().unwrap_or_default();
+
+    // 兜底：用上一次成功提交时缓存下来的围栏（同一场地才用）。
+    if layout_fences.is_empty() {
+        match crate::api::model::load_fence_cache_for(anchor) {
+            Some((ts, fences)) => {
+                log(&format!(
+                    "√ [fence] 回退缓存围栏 {} 个（缓存于 {}）",
+                    fences.len(),
+                    crate::track::geom::fmt_gain_time(ts)
+                ));
+                layout_fences = fences;
+            }
+            None => log("⚠ [fence] 无可用围栏，跑道直道退化为纯几何拟合"),
+        }
+    }
     if !layout_fences.is_empty() {
         log(&format!(
             "√ [track] {} 个围栏用于摆正跑道直道",

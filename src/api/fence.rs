@@ -61,6 +61,33 @@ pub fn fetch_geo_fence_with_area(client: &mut ApiClient) -> Result<GeoFenceRespo
     })
 }
 
+/// 把 `geo_fences_json` 解析成多边形环。
+///
+/// 策略响应与点位缓存里存的都是 [`canonical_fences_json`] 产出的形状
+/// （`[{id?, name?, points:[{lat,lng,glat?,glng?}]}]`），因此用同一个
+/// `point_xy` 取点即可。空串、`"[]"`、格式不符一律返回空——围栏是可选能力，
+/// 解析不出来就退化为自由跑，不应当报错。
+pub fn parse_fences_json(raw: &str) -> Vec<Vec<(f64, f64)>> {
+    let Ok(value) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|fence| fence.get("points")?.as_array())
+        .filter_map(|points| {
+            let ring: Vec<(f64, f64)> = points
+                .iter()
+                .filter_map(point_xy)
+                .filter(|(lat, lon)| !(*lat == 0.0 && *lon == 0.0))
+                .collect();
+            (ring.len() >= 3).then_some(ring)
+        })
+        .collect()
+}
+
 fn canonical_fences_json(fences: &[Value]) -> String {
     let canonical: Vec<Value> = fences
         .iter()
@@ -127,7 +154,7 @@ fn field_num(p: &Value, keys: &[&str]) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_fences_json, point_xy};
+    use super::{canonical_fences_json, parse_fences_json, point_xy};
     use serde_json::{json, Value};
 
     #[test]
@@ -165,5 +192,46 @@ mod tests {
         assert_eq!(parsed[0]["points"][0]["lng"], 116.2);
         assert_eq!(parsed[0]["points"][0]["glng"], 116.1);
         assert!(parsed[0]["points"][0].get("lon").is_none());
+    }
+
+    /// 策略/缓存里的 geo_fences_json 必须能还原成多边形环。
+    #[test]
+    fn parse_fences_json_round_trips_canonical_shape() {
+        let canonical = canonical_fences_json(&[json!({
+            "id": 1774,
+            "name": "学校",
+            "points": [
+                {"lat": 39.4, "lon": 116.2},
+                {"lat": 39.4, "lon": 116.3},
+                {"lat": 39.5, "lon": 116.3}
+            ]
+        })]);
+        let rings = parse_fences_json(&canonical);
+        assert_eq!(rings.len(), 1, "应解析出 1 个环：{canonical}");
+        assert_eq!(rings[0].len(), 3);
+        assert!((rings[0][0].0 - 39.4).abs() < 1e-9);
+        assert!((rings[0][2].1 - 116.3).abs() < 1e-9);
+    }
+
+    /// 围栏是可选能力：空串、`"[]"`、坏 JSON、点数不足都必须安静地返回空。
+    #[test]
+    fn parse_fences_json_is_lenient_on_bad_input() {
+        for raw in ["", "[]", "not json", "{}", "[{\"points\":[]}]"] {
+            assert!(
+                parse_fences_json(raw).is_empty(),
+                "输入 {raw:?} 应返回空而不是 panic"
+            );
+        }
+        // 少于 3 个点的环不是多边形
+        let two = json!([{"points": [{"lat": 1.0, "lon": 2.0}, {"lat": 1.1, "lon": 2.1}]}]);
+        assert!(parse_fences_json(&two.to_string()).is_empty());
+        // 全 0 坐标（未定位）应被剔除，剩不足 3 点即丢弃
+        let zeros = json!([{"points": [
+            {"lat": 0.0, "lon": 0.0},
+            {"lat": 0.0, "lon": 0.0},
+            {"lat": 0.0, "lon": 0.0},
+            {"lat": 1.0, "lon": 2.0}
+        ]}]);
+        assert!(parse_fences_json(&zeros.to_string()).is_empty());
     }
 }
