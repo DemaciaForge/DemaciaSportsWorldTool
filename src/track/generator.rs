@@ -35,10 +35,17 @@ pub const MAX_EXCEPTION_GPS_SPEED_KMH: f64 = 6.0;
 /// create a map-scale jump that the server interprets as an invalid route.
 pub const MAX_EXCEPTION_DRIFT_M: f64 = 6.0;
 
-/// 速度字段的测量噪声（相对标准差）：真机 `speed` 与「位移/时间差」只差这一点。
-pub const SPEED_FIELD_MEAN_NOISE: f64 = 0.05;
-pub const SPEED_FIELD_MIN_NOISE: f64 = 0.01;
-/// 速度字段短时丢失（隧道 / 建筑遮挡）的概率与替代值。
+/// 速度字段的测量噪声（相对标准差）。
+///
+/// 真机 `speed` 是定位芯片给的瞬时速度，与「本段位移/时间差」的比值实测落在
+/// 0.64–1.26；取 5% 会让这条比值几乎恒等于 1，反而是机器特征。
+pub const SPEED_FIELD_MEAN_NOISE: f64 = 0.18;
+pub const SPEED_FIELD_MIN_NOISE: f64 = 0.05;
+/// 速度字段读数为 0 的概率：芯片给不出速度时就是 0.0（静止 / 刚启动 / 被遮挡）。
+///
+/// 实测一条 918 s 的记录里 193 点有 37 个 `speed == 0`（约 19%）。
+pub const SPEED_FIELD_ZERO_P: f64 = 0.16;
+/// 速度字段短时掉值（隧道 / 建筑遮挡）的概率与替代值。
 pub const SPEED_FIELD_DROP_P: f64 = 0.02;
 pub const SPEED_FIELD_DROP_KMH: (f64, f64) = (0.9, 2.2);
 /// 海拔随里程的起伏量（米 / km）。
@@ -450,6 +457,11 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         0
     };
     let mut prev_raw = tracker.ring_origin();
+    // 定位精度 / 卫星数：围绕本次会话基准缓慢游走。
+    let radius_mean = rng.uniform(1.5, 2.3);
+    let mut radius_now = radius_mean;
+    let count_mean = rng.uniform(18.0, 31.0);
+    let mut count_now = count_mean;
     for i in 0..n {
         let mut point = if i <= 1 {
             tracker.advance(0.0, 0.0, &mut rng)
@@ -472,23 +484,16 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
             }
         }
         prev_raw = point;
-        if std::env::var("NSPROBE").is_ok() && i >= 5 && i <= 12 {
-            let pr = tracker_plan_debug(&locs);
-            eprintln!(
-                "DBG i={i} step={:.2} dt={:.1} pt=({:.2},{:.2}) {pr}",
-                step_m[i], step_dt[i], point.0, point.1
-            );
-        }
         let (lat, lng) = ring.to_bd(point.0, point.1);
         let (typ, lt) = kinds[i];
-        let rad = round_to(
-            if typ == 3 {
-                rng.uniform(1.4, 5.1)
-            } else {
-                rng.uniform(1.4, 2.4)
-            },
-            2,
-        );
+        // 定位精度与卫星数：真机读数会是**缓慢游走**的（相邻点几乎相同），
+        // 逐点独立随机反而是机器特征。
+        radius_now = (radius_now - radius_mean) * 0.85 + radius_mean + rng.gauss(0.0, 0.22);
+        radius_now = radius_now.clamp(1.2, if typ == 3 { 6.5 } else { 3.2 });
+        count_now = (count_now - count_mean) * 0.9 + count_mean + rng.gauss(0.0, 1.6);
+        count_now = count_now.clamp(8.0, 44.0);
+        let rad = round_to(radius_now, 2);
+        let count = round_to(count_now, 0) as i64;
         let state = if color_mode == TrackColorMode::FullGreen {
             1
         } else if typ == 0 {
@@ -528,7 +533,7 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
             } else {
                 rng.choice(&[1, 1, 1, -1])
             },
-            count: rng.randint(20, 88),
+            count,
             dtr: 0.0,
             state,
             locationId: String::new(),
@@ -564,12 +569,21 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
     if n > 1 {
         locs[1].steps = 0;
     }
+    // 计步器口径的累计步幅距离：Σ(本段步数 × 全局步幅估计)。
+    //
+    // `stepDistance` 在官方点结构里是**累计量**（`OooO00o.java` 用两点相减得到
+    // 一个窗口的步幅距离），不是每段值。它约等于 `totalDis`，但因为用的是全局步幅
+    // 估计而不是本段实测步幅，逐点会有几百米的缓慢漂移——这正是计步器读数的样子。
+    // 全 0 是最容易被抓的破绽之一：真人跑 2 km，计步器不可能一米都没记。
+    let mut sd_acc = 0.0f64;
     for i in 2..n {
         let exact = step_m[i] / mean_stride + carry;
         let ds = exact.floor();
         carry = exact - ds;
         acc_steps += ds;
         locs[i].steps = acc_steps as i64;
+        sd_acc += ds * mean_stride;
+        locs[i].stepDistance = round_to(sd_acc, 4);
     }
     let mut cum = 0.0f64;
     let mut alt = alt0;
@@ -592,10 +606,18 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         } else {
             round_to(seg / dt, 4)
         };
-        // 速度字段 = 本段位移 / 本段时间差（m/s → km/h）+ 测量噪声
+        // `speed` 是**GPS 瞬时速度**（km/h），不是本段平均速度的精确换算：
+        // 真机读数有三件事必须体现，否则和位移/时间差的相关性会"过于完美"。
+        //
+        // * 约 18% 的点读数为 0——定位芯片给不出速度（静止、刚开始、被遮挡）时
+        //   就是 0.0，而不是"慢"；
+        // * 其余点带 ±18% 的相对噪声（实测带宽约 0.64–1.26）；
+        // * 偶发极低的掉值（建筑遮挡）。
         let kmh = seg / dt * 3.6;
         locs[i].speed = if i == 0 {
             round_to(kmh, 4)
+        } else if rng.random() < SPEED_FIELD_ZERO_P {
+            0.0
         } else if rng.random() < SPEED_FIELD_DROP_P {
             round_to(
                 rng.uniform(SPEED_FIELD_DROP_KMH.0, SPEED_FIELD_DROP_KMH.1),
@@ -603,7 +625,7 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
             )
         } else {
             let sigma = (kmh * SPEED_FIELD_MEAN_NOISE).max(SPEED_FIELD_MIN_NOISE);
-            round_to((kmh + rng.gauss(0.0, sigma)).max(0.0), 4)
+            round_to((kmh + rng.gauss(0.0, sigma)).max(0.3), 4)
         };
         // 海拔：每米计起伏 + 与配速同相
         let km_done = cum_i / 1000.0;
@@ -669,15 +691,30 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
     //    造出一次 19 m/s 的瞬移。必过点已由 `site_ring` 把打卡点连成路线覆盖，
     //    这里只负责把「本来就在点上」的采样点对齐到协议精度。
     let _ = snap_points_with_cost(&mut locs, snap_points_bd, 2.5);
-    //    「本段位移 / 本段时间差」。
+
+    // ⑨ 速度字段收口：`avgSpeed` 严格等于「本段位移 / 本段时间差」，
+    //    `speed` 是 GPS 瞬时速度（km/h），按真机读数特征给出。
+    //
+    //    这是 `speed` 唯一的写入点——前面若也算一遍，后面的收口会把它覆盖掉，
+    //    掉零与噪声就白设了。
     let n_len = locs.len();
     for i in 2..n_len {
         let dt = (locs[i].totalTime - locs[i - 1].totalTime).max(1) as f64;
         let seg = dir(&locs[i - 1].coords(), &locs[i].coords());
         locs[i].avgSpeed = round_to(seg / dt, 4);
         let kmh = seg / dt * 3.6;
-        let sigma = (kmh * SPEED_FIELD_MEAN_NOISE).max(SPEED_FIELD_MIN_NOISE);
-        locs[i].speed = round_to((kmh + rng.gauss(0.0, sigma)).max(0.0), 4);
+        locs[i].speed = if rng.random() < SPEED_FIELD_ZERO_P {
+            // 定位芯片给不出速度时读数为 0.0（静止 / 刚启动 / 被遮挡）。
+            0.0
+        } else if rng.random() < SPEED_FIELD_DROP_P {
+            round_to(
+                rng.uniform(SPEED_FIELD_DROP_KMH.0, SPEED_FIELD_DROP_KMH.1),
+                4,
+            )
+        } else {
+            let sigma = (kmh * SPEED_FIELD_MEAN_NOISE).max(SPEED_FIELD_MIN_NOISE);
+            round_to((kmh + rng.gauss(0.0, sigma)).max(0.3), 4)
+        };
     }
 
     let mut track = Track {
@@ -955,59 +992,28 @@ pub(crate) fn finalize_totals(track: &mut Track) {
     track.segments = rebuild_segments(track);
 }
 
-fn cumulative_at(locs: &[GenPoint], t: f64, pick: impl Fn(&GenPoint) -> f64) -> f64 {
-    if locs.is_empty() {
-        return 0.0;
-    }
-    if t <= 0.0 {
-        return pick(&locs[0]);
-    }
-    for pair in locs.windows(2) {
-        let (a, b) = (&pair[0], &pair[1]);
-        if t >= a.totalTime as f64 && t <= b.totalTime as f64 {
-            // 起点哨兵与首点同刻（区间退化），跳过它。
-            if b.totalTime == a.totalTime {
-                continue;
-            }
-            let span = (b.totalTime - a.totalTime) as f64;
-            let k = ((t - a.totalTime as f64) / span).clamp(0.0, 1.0);
-            return pick(a) + (pick(b) - pick(a)) * k;
-        }
-    }
-    pick(locs.last().unwrap())
-}
-
 fn rebuild_windows(track: &Track) -> (Vec<TenWindow>, Vec<TenWindow>) {
-    let locs = &track.locations;
-    let total = track.totalTime as f64;
-    // 窗口切分：整除的 10 s 窗，余下的残窗并入上一窗。
+    // 窗口只由 `wire::ten_second_spans` 定义一次，提交体和 OBS 都读它。
     //
-    // 协议里 `speedPerTenSec[].time` 恒为 10，服务端按「距离 / 10 秒」读配速。
-    // 若末窗只有 3 s 却被当成 10 s，就会读成「1 公里 20 分钟」的假掉速，因此残窗
-    // 必须并进前一个窗口，而不是自成一项。
-    let full = (total / 10.0).floor().max(0.0);
-    let n_win = if full < 1.0 { 1 } else { full as usize };
-    let span = total / n_win as f64;
-    let mut sp: Vec<TenWindow> = Vec::new();
-    let mut stf: Vec<TenWindow> = Vec::new();
-    let mut lo = 0.0f64;
-    for k in 0..n_win {
-        let hi = if k + 1 == n_win { total } else { lo + span };
-        let d = cumulative_at(locs, hi, |p| p.totalDis) - cumulative_at(locs, lo, |p| p.totalDis);
-        let s = cumulative_at(locs, hi, |p| p.steps as f64)
-            - cumulative_at(locs, lo, |p| p.steps as f64);
+    // 协议里 `speedPerTenSec[].time` 恒为 10，但末窗可能就是不足 10 秒的残窗；
+    // 服务端按 `endTime - beginTime` 读实际时长，因此这里如实保留残窗，而不是
+    // 把它并进上一窗——并窗会让窗口总时长与 `totalTime` 对不上。
+    let spans = super::wire::ten_second_spans(track);
+    let mut sp: Vec<TenWindow> = Vec::with_capacity(spans.len());
+    let mut stf: Vec<TenWindow> = Vec::with_capacity(spans.len());
+    for span in spans {
         sp.push(TenWindow {
             time: 10,
-            value: round_to(d.max(0.0), 2),
+            value: round_to(span.distance_m, 2),
         });
         stf.push(TenWindow {
             time: 10,
-            value: round_to(s.max(0.0), 0),
+            value: span.steps as f64,
         });
-        lo = hi;
     }
     (sp, stf)
 }
+
 fn rebuild_segments(track: &Track) -> Vec<Segment> {
     let locs = &track.locations;
     let total = track.totalTime as f64;
@@ -1015,9 +1021,10 @@ fn rebuild_segments(track: &Track) -> Vec<Segment> {
     let mut lo = 0.0f64;
     while lo < total {
         let hi = (lo + 60.0).min(total);
-        let d = cumulative_at(locs, hi, |p| p.totalDis) - cumulative_at(locs, lo, |p| p.totalDis);
-        let s = cumulative_at(locs, hi, |p| p.steps as f64)
-            - cumulative_at(locs, lo, |p| p.steps as f64);
+        let d = super::wire::cumulative_at(locs, hi, |p| p.totalDis)
+            - super::wire::cumulative_at(locs, lo, |p| p.totalDis);
+        let s = super::wire::cumulative_at(locs, hi, |p| p.steps as f64)
+            - super::wire::cumulative_at(locs, lo, |p| p.steps as f64);
         let span = (hi - lo).max(1.0);
         out.push(Segment {
             totalTime: round_to(span, 0) as i64,
@@ -1151,8 +1158,4 @@ mod tests {
             }
         }
     }
-}
-
-fn tracker_plan_debug(_locs: &[GenPoint]) -> String {
-    String::new()
 }

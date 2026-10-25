@@ -330,6 +330,9 @@ mod tests {
     ///
     /// 首窗允许放宽：t=0 的首点是「开始记录还没迈步」，真人记录的首个 10 s 窗
     /// 本来就比匀速慢（真机样本同样如此），因此首窗按 20'00"/km 判。
+    ///
+    /// 逐窗配速必须按**实际窗宽**换算：总时长不是 10 的整数倍时，末窗就是一个不足
+    /// 10 秒的残窗（真机同样如此），把它当成整 10 秒读会显示成一次并不存在的掉速。
     #[test]
     fn test_speeds_within_valid_pace_window() {
         let pts = sample_points();
@@ -343,20 +346,22 @@ mod tests {
         for seed in 0..16u64 {
             for &(dist, dur) in &combos {
                 let t = build(dist, dur, seed, (38.9, 121.54), 1_788_958_186_123, &pts);
-                for (i, w) in t.speedPerTenSec.iter().enumerate() {
-                    let pace = 1000.0 / (w.value / 10.0); // 秒/km
-                                                          // 首尾窗允许放宽：t=0 的首点是「开始记录还没迈步」，末窗是
-                                                          // 结尾断崖（收速）所在的窗口，真机记录里这两端都比匀速慢。
+                let spans = crate::track::wire::ten_second_spans(&t);
+                for (i, s) in spans.iter().enumerate() {
+                    let secs = (s.end_s - s.begin_s).max(1) as f64;
+                    let pace = 1000.0 / (s.distance_m / secs); // 秒/km
+                                                               // 首尾窗允许放宽：t=0 的首点是「开始记录还没迈步」，末窗是
+                                                               // 结尾断崖（收速）所在的窗口，真机记录里这两端都比匀速慢。
                     let ceil = if i == 0 {
                         1200.0
-                    } else if i + 1 == t.speedPerTenSec.len() {
+                    } else if i + 1 == spans.len() {
                         750.0
                     } else {
                         600.0
                     };
                     assert!(
                         (141.0..=ceil).contains(&pace),
-                        "seed={seed} dist={dist} 窗{i} 配速 {}/km 越界",
+                        "seed={seed} dist={dist} 窗{i} 配速 {}/km 越界（窗宽 {secs:.0}s）",
                         format_args!("{}:{:02}", pace as i64 / 60, (pace as i64) % 60)
                     );
                 }
@@ -487,7 +492,26 @@ mod tests {
         assert_eq!(wrap["useZip"], false);
         let pts: Vec<serde_json::Value> =
             serde_json::from_str(wrap["allLocJson"].as_str().unwrap()).unwrap();
-        assert_eq!(pts[0].as_object().unwrap().len(), 27, "点键数必须 27");
+        // 官方点结构里 `accuracy` / `hasAltitude` / `steps` / `stepDistance` 都在，
+        // 少一个就是"这份记录不是这个 App 记的"。
+        assert_eq!(pts[0].as_object().unwrap().len(), 30, "点键数必须 30");
+        for k in [
+            "accuracy",
+            "hasAltitude",
+            "steps",
+            "stepDistance",
+            "coorType",
+            "validTime",
+        ] {
+            assert!(pts[0].get(k).is_some(), "点必须带 {k}");
+        }
+        // `stepDistance` 是累计量：真人跑完全程，计步器不可能一米都没记。
+        let last_sd = pts.last().unwrap()["stepDistance"].as_f64().unwrap();
+        assert!(
+            last_sd > 0.9 * track.totalDistance,
+            "末点 stepDistance {last_sd:.0} 应接近总距离 {:.0}",
+            track.totalDistance
+        );
         // segment_json 是空串 gzip
         let raw =
             crate::crypto::envelope::b64_decode(obj["segment_json"].as_str().unwrap()).unwrap();

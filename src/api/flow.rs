@@ -539,6 +539,24 @@ pub fn run_full_flow(
             .unwrap_or_default(),
     ));
 
+    // ③b 真实性闸门：真正发出去之前，把这条轨迹当成服务端重算一遍。
+    //
+    // 这一步以前只有 dry-run 做，正式流程直接提交——也就是说几何或时序一旦出问题，
+    // 是"发出去了才知道"。放在这里，宁可本地报错也不发一条会被判无效的记录。
+    {
+        let report = crate::track::realism::audit(&track);
+        log(&format!("[realism] {}", report.summary()));
+        for f in &report.failures {
+            log(&format!("  ✗ [realism] {f}"));
+        }
+        if !report.passed() {
+            return Err(format!(
+                "轨迹未通过真实性互校（{}），已中止提交以避免被服务端判为无效记录",
+                report.summary()
+            ));
+        }
+    }
+
     // ④ 五点 wrapper（跑完态，仅报实际经过的点并保留区域元数据）
     let five = five_point_wrapper_with_area(&submitted_pts, track.startTime, &area);
     let _ = &five;

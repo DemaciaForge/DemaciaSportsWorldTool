@@ -560,6 +560,69 @@ pub fn audit(track: &Track) -> AuthenticityReport {
         ));
     }
     checks.push(c);
+
+    // 11b 提交载荷里的 10s 窗：时长必须覆盖整段，逐窗配速必须像人跑的
+    //
+    // 这条校验的对象是**真正发出去的那份窗口序列**（`wire::ten_second_spans`，
+    // 提交体与 OBS 共用）。旧实现两处各算一遍，采样点不在 10 s 边界上时读数就不同；
+    // 而且末窗常被当成整 10 秒读，于是显示成一次并不存在的掉速。
+    let spans = super::wire::ten_second_spans(track);
+    if spans.len() >= 2 {
+        let total_time = track.totalTime;
+        let dur_sum: i64 = spans.iter().map(|s| s.end_s - s.begin_s).sum();
+        let c = Check::new(
+            "ten_sec_window_duration_sum_s",
+            dur_sum as f64,
+            format!("= {total_time}"),
+            (dur_sum - total_time).abs() <= 1,
+        );
+        checks.push(c);
+        if (dur_sum - total_time).abs() > 1 {
+            failures.push(format!(
+                "10s 窗时长合计 {dur_sum} s 与总时长 {total_time} s 不符"
+            ));
+        }
+        // 逐窗配速：按**实际窗宽**换算（残窗不能被当成 10 秒读）。
+        let mut slow_mid = 0usize;
+        let mut peak = 0.0f64;
+        for (k, s) in spans.iter().enumerate() {
+            let secs = (s.end_s - s.begin_s).max(1) as f64;
+            let v = s.distance_m / secs;
+            peak = peak.max(v);
+            let edge = k == 0 || k + 1 == spans.len();
+            if !edge && v < 1.0 {
+                slow_mid += 1;
+            }
+        }
+        let c = Check::new(
+            "ten_sec_window_speed_peak_mps",
+            peak,
+            format!(
+                "<= {}",
+                round_to(super::generator::SPEED_CEIL * INSTANT_SPEED_TOLERANCE, 2)
+            ),
+            peak <= super::generator::SPEED_CEIL * INSTANT_SPEED_TOLERANCE,
+        );
+        if !c.pass {
+            failures.push(format!("10s 窗峰值配速 {peak:.1} m/s，超出人类跑步极限"));
+        }
+        checks.push(c);
+        // 途中不该有「停下来走」的窗口（首末窗允许起跑加速与冲线减速）。
+        let allowed = (spans.len() / 20).max(1);
+        let c = Check::new(
+            "ten_sec_window_slow_mid_count",
+            slow_mid as f64,
+            format!("<= {allowed}"),
+            slow_mid <= allowed,
+        );
+        if !c.pass {
+            failures.push(format!(
+                "{slow_mid} 个途中 10s 窗配速低于 1.0 m/s（无停顿的跑步里不该出现）"
+            ));
+        }
+        checks.push(c);
+    }
+
     let seg_ratio = seg / track.totalDistance.max(1e-6);
     let c = Check::new(
         "sixty_sec_segment_vs_total",
@@ -701,11 +764,10 @@ impl LaneTracker {
 /// 采样网格：以 5 s 为主的非均匀间隔，末段被 clamp 到 `MAX_SAMPLE_GAP_S` 以内。
 ///
 /// 返回 (times, dts)，`dts[i]` 是第 i 个点的**前进时长**，且所有 `dts[i] ≤ MAX_SAMPLE_GAP_S`。
-/// 采样时刻（秒）：主 5 s，偶发 3–8 s；`dts[i]` 是「从 i-1 到 i」的时长。
+/// 采样时刻（秒）：主 5 s，偶发 1–8 s。
 ///
-/// 最短取 3 s：真机 GPS 采样偶尔加密到 1–2 s，但那种格点会把一圈弯道切成
-/// 「1 秒走 2 米」，让轨迹与实际配速脱节；3 s 已足够体现"非均匀采样"，又不会
-/// 把位移摊薄。
+/// 短间隔不是噪声而是真机行为：定位回调在信号好时会加密到 1–2 s（实测一次 918 s
+/// 的记录里 1 s 间隔出现 7 次、2 s 出现 6 次）。清一色 5 s 反而是机器特征。
 pub fn sample_grid(dur_s: f64, rng: &mut Rng) -> (Vec<f64>, Vec<f64>) {
     let mut times = Vec::new();
     let mut t = 0.0;
@@ -714,7 +776,7 @@ pub fn sample_grid(dur_s: f64, rng: &mut Rng) -> (Vec<f64>, Vec<f64>) {
         t += if rng.random() < 0.80 {
             5.0
         } else {
-            rng.choice(&[3.0, 4.0, 6.0, 7.0, 8.0])
+            rng.choice(&[1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0])
         };
     }
     if times.is_empty() {

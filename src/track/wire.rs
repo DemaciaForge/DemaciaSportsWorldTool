@@ -1,7 +1,8 @@
 //! OBS 对象组装。
 //!
-//! 10 键对象，每值 gzip+base64；BD→GCJ 单次转换；27 键协议点集；
-//! 10s 窗（speed/step_freq）；每 1000m 一圈；五点 fixed_point_json。
+//! 10 键对象，每值 gzip+base64；BD→GCJ 单次转换；30 键协议点集（与官方点结构
+//! 对齐）；10s 窗（speed/step_freq，与提交体共用 [`ten_second_spans`]）；
+//! 每 1000m 一圈；五点 fixed_point_json。
 #![allow(non_snake_case)]
 
 use chrono::{Local, TimeZone};
@@ -62,10 +63,85 @@ fn gz_str(v: &str) -> String {
     gz(v.as_bytes())
 }
 
-/// 27 键协议点集（gen 点 → OBS 点；gLat/gLng 由 BD 转 GCJ）。
+/// 累计量在任意时刻的插值。
+///
+/// 服务端读的是「每个窗口结束时刻的累计快照」之差；窗口边界（10 的整数倍）通常
+/// 不与采样点重合，因此必须插值——直接取「边界前最后一个采样点」会让窗口距离
+/// 系统性偏短，并让「窗内距离合计」对不上总距离。
+pub fn cumulative_at(locs: &[GenPoint], t: f64, pick: impl Fn(&GenPoint) -> f64) -> f64 {
+    if locs.is_empty() {
+        return 0.0;
+    }
+    if t <= 0.0 {
+        return pick(&locs[0]);
+    }
+    for pair in locs.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        if t >= a.totalTime as f64 && t <= b.totalTime as f64 {
+            // 起点哨兵与首点同刻（区间退化），跳过它。
+            if b.totalTime == a.totalTime {
+                continue;
+            }
+            let span = (b.totalTime - a.totalTime) as f64;
+            let k = ((t - a.totalTime as f64) / span).clamp(0.0, 1.0);
+            return pick(a) + (pick(b) - pick(a)) * k;
+        }
+    }
+    pick(locs.last().unwrap())
+}
+
+/// 一个 10 秒窗口的边界与量值。
+///
+/// 提交体的 `speedPerTenSec` / `stepsPerTenSec` 与 OBS 的 `speed_json` /
+/// `step_freq_json` 必须读同一份数据——两处各算一遍，只要口径差一点，服务端把
+/// 两个载荷对起来就能看出矛盾。因此窗口只在这里定义一次。
+#[derive(Clone, Copy, Debug)]
+pub struct TenSecondSpan {
+    /// 相对起跑时刻的秒数（10 的整数倍）。
+    pub begin_s: i64,
+    /// 相对起跑时刻的秒数；末窗不足 10 秒时等于总时长。
+    pub end_s: i64,
+    pub distance_m: f64,
+    pub steps: i64,
+}
+
+/// 按 10 秒切窗：边界严格落在 10 的整数倍上，末窗可能不足 10 秒。
+///
+/// 各窗距离之和恒等于总距离、时长之和恒等于总时长（插值后逐窗相减是望远镜求和），
+/// 因此「窗合计 vs 总量」这条守恒关系天然成立。
+pub fn ten_second_spans(track: &Track) -> Vec<TenSecondSpan> {
+    let total = track.totalTime;
+    let locs = &track.locations;
+    if total <= 0 || locs.len() < 2 {
+        return Vec::new();
+    }
+    let n = (total + 9) / 10;
+    let mut out = Vec::with_capacity(n as usize);
+    for k in 0..n {
+        let begin = k * 10;
+        let end = (begin + 10).min(total);
+        let d = cumulative_at(locs, end as f64, |p| p.totalDis)
+            - cumulative_at(locs, begin as f64, |p| p.totalDis);
+        let s = cumulative_at(locs, end as f64, |p| p.steps as f64)
+            - cumulative_at(locs, begin as f64, |p| p.steps as f64);
+        out.push(TenSecondSpan {
+            begin_s: begin,
+            end_s: end,
+            distance_m: round_to(d.max(0.0), 4),
+            steps: s.max(0.0).round() as i64,
+        });
+    }
+    out
+}
+
+/// 协议点集（gen 点 → OBS 点；gLat/gLng 由 BD 转 GCJ）。
+///
+/// 字段与官方 payload 对齐：`accuracy`/`hasAltitude`/`steps`/`stepDistance`
+/// 都在官方点结构里，缺一个就是"这份记录不是这个 App 记的"。
 pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
     let (glat, glng) = bd09_to_gcj02(p.gLat, p.gLng);
     json!({
+        "accuracy": round_to(p.accuracy, 2),
         "avgSpeed": round_to(p.avgSpeed, 4),
         "bdA": round_to(p.bdA, 2),
         "bdD": round_to(p.bdD, 2),
@@ -78,6 +154,7 @@ pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
         "gLat": round_to(glat, 7),
         "gLng": round_to(glng, 7),
         "gainTime": p.gainTime,
+        "hasAltitude": p.hasAltitude,
         "id": p.id,
         "lat": -1.0,
         "lng": -1.0,
@@ -87,7 +164,8 @@ pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
         "radius": round_to(p.radius, 2),
         "speed": round_to(p.speed, 4),
         "state": p.state,
-        "stepDistance": 0.0,
+        "stepDistance": round_to(p.stepDistance, 4),
+        "steps": p.steps,
         "totalDis": round_to(p.totalDis, 4),
         "totalTime": p.totalTime,
         "type": p.ptype,
@@ -356,6 +434,148 @@ mod validation_tests {
     }
 
     #[test]
+    /// 真实手机载荷的统计特征：这些数字是从一条 918 s 真机记录里量出来的。
+    ///
+    /// 任何一项明显偏离，"这条记录是不是这个 App 记的"就成了问题。
+    #[test]
+    fn payload_matches_device_reading_signatures() {
+        let points = vec![
+            (38.901678, 121.540241),
+            (38.902564, 121.541233),
+            (38.900921, 121.542310),
+            (38.899823, 121.541010),
+            (38.900455, 121.539512),
+        ];
+        for seed in [0u64, 5, 42] {
+            let track = crate::track::generator::build(
+                2000.0,
+                918,
+                seed,
+                (38.9, 121.54),
+                1_700_000_000_000,
+                &points,
+            );
+            let pts: Vec<serde_json::Value> = track
+                .locations
+                .iter()
+                .map(|p| conv_point(p, track.startTime))
+                .collect();
+            let n = pts.len();
+
+            // 1) 定位芯片给不出速度时读数为 0：真机约 19%，不能一个都没有，也不能过半。
+            let zeros = pts
+                .iter()
+                .filter(|p| p["speed"].as_f64().unwrap() <= 0.0)
+                .count();
+            let zfrac = zeros as f64 / n as f64;
+            assert!(
+                (0.05..=0.35).contains(&zfrac),
+                "seed={seed}: speed==0 占比 {:.0}%（真机约 19%）",
+                zfrac * 100.0
+            );
+
+            // 2) stepDistance 是累计步幅距离，末点必须接近总距离。
+            let last_sd = pts[n - 1]["stepDistance"].as_f64().unwrap();
+            assert!(
+                last_sd > 0.9 * track.totalDistance && last_sd < 1.1 * track.totalDistance,
+                "seed={seed}: 末点 stepDistance {last_sd:.0} vs 总距离 {:.0}",
+                track.totalDistance
+            );
+
+            // 3) speed 与位移/时间差的比值：中位数接近 1，但分布必须明显散开
+            //    （真机实测 0.64–1.26）。清一色 1.00 就是机器特征。
+            let mut ratios: Vec<f64> = Vec::new();
+            for i in 1..n {
+                let a = &pts[i - 1];
+                let b = &pts[i];
+                let dy = (b["gLat"].as_f64().unwrap() - a["gLat"].as_f64().unwrap()) * 111132.0;
+                let dx = (b["gLng"].as_f64().unwrap() - a["gLng"].as_f64().unwrap()) * 86600.0;
+                let dt = b["totalTime"].as_i64().unwrap() - a["totalTime"].as_i64().unwrap();
+                let sp = b["speed"].as_f64().unwrap();
+                let d = (dx * dx + dy * dy).sqrt();
+                if dt >= 1 && sp > 0.1 && d > 0.5 {
+                    ratios.push(sp / (d / dt as f64 * 3.6));
+                }
+            }
+            ratios.sort_by(|x: &f64, y: &f64| x.total_cmp(y));
+            let p50 = ratios[ratios.len() / 2];
+            let p10 = ratios[ratios.len() / 10];
+            let p90 = ratios[ratios.len() * 9 / 10];
+            assert!(
+                (0.85..=1.15).contains(&p50),
+                "seed={seed}: speed/位移 中位比 {p50:.2}"
+            );
+            assert!(
+                p90 - p10 > 0.35,
+                "seed={seed}: speed 噪声过窄（p10={p10:.2} p90={p90:.2}）"
+            );
+
+            // 4) 采样间隔：以 5 s 为主，但不能清一色 5 s。
+            let mut gaps: Vec<i64> = Vec::new();
+            for i in 2..n {
+                gaps.push(
+                    pts[i]["totalTime"].as_i64().unwrap()
+                        - pts[i - 1]["totalTime"].as_i64().unwrap(),
+                );
+            }
+            let five = gaps.iter().filter(|g| **g == 5).count() as f64 / gaps.len() as f64;
+            assert!(
+                (0.55..=0.92).contains(&five),
+                "seed={seed}: 5 s 间隔占比 {:.0}%",
+                five * 100.0
+            );
+            assert!(
+                gaps.iter().any(|g| *g <= 2),
+                "seed={seed}: 缺少 1–2 s 加密采样"
+            );
+        }
+    }
+    /// 提交体与 OBS 的 10s 窗必须读同一份数据，且与总量守恒。
+    ///
+    /// 旧实现两处各算一遍：OBS 用插值、提交体用「边界前最后一个采样点」，采样点
+    /// 不落在 10 s 边界上时两边读数不同——服务端把两个载荷对起来就能看见矛盾。
+    #[test]
+    fn ten_second_spans_are_shared_and_conserved() {
+        let points = vec![(38.901678, 121.540241), (38.902564, 121.541233)];
+        let track = crate::track::generator::build(
+            1440.0,
+            661,
+            3,
+            (38.9, 121.54),
+            1_700_000_000_000,
+            &points,
+        );
+        let spans = ten_second_spans(&track);
+        assert!(!spans.is_empty());
+        // 边界严格落在 10 的整数倍上，最后一段可能不足 10 秒。
+        for (k, s) in spans.iter().enumerate() {
+            assert_eq!(s.begin_s, k as i64 * 10);
+            assert!(s.end_s > s.begin_s, "窗 {k} 宽度必须为正");
+            assert!(s.end_s - s.begin_s <= 10);
+        }
+        assert_eq!(spans.last().unwrap().end_s, track.totalTime);
+        // 距离 / 步数 / 时长三组都严格守恒。
+        let d: f64 = spans.iter().map(|s| s.distance_m).sum();
+        let n: i64 = spans.iter().map(|s| s.steps).sum();
+        let t: i64 = spans.iter().map(|s| s.end_s - s.begin_s).sum();
+        assert!(
+            (d / track.totalDistance - 1.0).abs() < 1e-3,
+            "窗距离合计 {d}"
+        );
+        assert!(
+            (n - track.totalSteps).unsigned_abs() <= 2,
+            "窗步数合计 {n} vs totalSteps {}",
+            track.totalSteps
+        );
+        assert_eq!(t, track.totalTime);
+        // 与 `speedPerTenSec` / `stepsPerTenSec` 逐项一致（OBS 读的就是这两组）。
+        assert_eq!(spans.len(), track.speedPerTenSec.len());
+        for (s, w) in spans.iter().zip(track.speedPerTenSec.iter()) {
+            assert!((s.distance_m - w.value).abs() < 0.01);
+        }
+    }
+
+    #[test]
     fn lap_metrics_use_minutes_per_kilometre_and_stride_centimetres() {
         let points = vec![(38.901678, 121.540241), (38.902564, 121.541233)];
         let mut track = crate::track::generator::build(
@@ -386,19 +606,14 @@ mod validation_tests {
 /// 旧版 App 样本为全局序号，不适用当前版本）。
 fn build_windows(track: &Track, rrid: i64) -> (Vec<Value>, Vec<Value>) {
     let start_ms = track.startTime;
-    let total_time = track.totalTime;
     let mut sp = Vec::new();
     let mut stf = Vec::new();
-    for (i, a) in track.speedPerTenSec.iter().enumerate() {
-        let b = &track.stepsPerTenSec[i];
-        let lo = (i * 10) as i64;
-        let hi = (i * 10 + 10) as i64;
-        let hi = hi.min(total_time);
-        let id = (rrid % 100000) * 1000 + hi;
+    for span in ten_second_spans(track) {
+        let id = (rrid % 100000) * 1000 + span.end_s;
         sp.push(json!({
-            "beginTime": start_ms + lo * 1000,
-            "distance": a.value,
-            "endTime": start_ms + hi * 1000,
+            "beginTime": start_ms + span.begin_s * 1000,
+            "distance": span.distance_m,
+            "endTime": start_ms + span.end_s * 1000,
             "flag": start_ms,
             "id": id,
             "queueNum": 0,
@@ -406,15 +621,15 @@ fn build_windows(track: &Track, rrid: i64) -> (Vec<Value>, Vec<Value>) {
         }));
         stf.push(json!({
             "avgDiff": 0.0,
-            "beginTime": start_ms + lo * 1000,
-            "endTime": start_ms + hi * 1000,
+            "beginTime": start_ms + span.begin_s * 1000,
+            "endTime": start_ms + span.end_s * 1000,
             "flag": start_ms,
             "id": id,
             "maxDiff": 0.0,
             "minDiff": 1000.0,
             "queueNum": 0,
             "state": 0,
-            "stepsNum": b.value as i64,
+            "stepsNum": span.steps,
         }));
     }
     (sp, stf)

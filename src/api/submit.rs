@@ -17,48 +17,30 @@ use serde_json::{json, Map, Value};
 pub const RECORD_PATH: &str = "/api/v70260/runnings/save/record";
 
 /// Android 10s 窗（id 种子 60000）。
+///
+/// 距离/步数取 `track::wire::ten_second_spans`——与 OBS 的 `speed_json` /
+/// `step_freq_json` 同一份数据。两处各算一遍时，只要采样点不落在 10 s 边界上，
+/// 提交体与 OBS 的窗口读数就会不同，服务端把两个载荷一对就能看见矛盾。
 fn android_tensec(track: &Track, start_ms: i64, kind: &str) -> Vec<Value> {
-    let locs = &track.locations;
-    let total_time = track.totalTime;
-    let mut out = Vec::new();
+    let spans = crate::track::wire::ten_second_spans(track);
     let rid_seed = 60000i64;
-    let mut w = 10i64;
-    while w <= total_time {
-        let lo = w - 10;
-        let hi = w.min(total_time);
-        let mut d_lo = 0.0f64;
-        let mut s_lo = 0i64;
-        let mut d_hi = 0.0f64;
-        let mut s_hi = 0i64;
-        for p in locs {
-            let tt = p.totalTime;
-            if tt <= lo {
-                d_lo = p.totalDis;
-                s_lo = p.steps;
-            }
-            if tt <= hi {
-                d_hi = p.totalDis;
-                s_hi = p.steps;
-            }
-        }
-        let dist = round_to((d_hi - d_lo).max(0.0), 4);
-        let steps_n = (s_hi - s_lo).max(0);
-        let begin = start_ms + lo * 1000;
-        let end = start_ms + hi * 1000;
-        let qn = w / 10 - 1;
+    let mut out = Vec::with_capacity(spans.len());
+    for (qn, span) in spans.iter().enumerate() {
+        let qn = qn as i64;
+        let begin = start_ms + span.begin_s * 1000;
+        let end = start_ms + span.end_s * 1000;
         if kind == "speed" {
             out.push(json!({
-                "beginTime": begin, "distance": dist, "endTime": end,
+                "beginTime": begin, "distance": span.distance_m, "endTime": end,
                 "flag": start_ms, "id": rid_seed + qn, "queueNum": qn, "state": 0,
             }));
         } else {
             out.push(json!({
                 "avgDiff": 0.0, "beginTime": begin, "endTime": end,
                 "flag": start_ms, "id": rid_seed + qn, "maxDiff": 0.0,
-                "minDiff": 1000.0, "queueNum": qn, "state": 0, "stepsNum": steps_n,
+                "minDiff": 1000.0, "queueNum": qn, "state": 0, "stepsNum": span.steps,
             }));
         }
-        w += 10;
     }
     out
 }
