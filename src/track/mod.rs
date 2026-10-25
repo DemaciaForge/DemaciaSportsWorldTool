@@ -318,3 +318,80 @@ mod tests {
         assert!(ks[1].starts_with("run_data/1320/1320403809.json"));
     }
 }
+
+#[cfg(test)]
+mod altitude_calibration_tests {
+    use super::altitude;
+    use super::generator::build;
+
+    fn points() -> Vec<(f64, f64)> {
+        vec![
+            (39.493046, 116.255475),
+            (39.493730, 116.255487),
+            (39.492786, 116.254498),
+            (39.492470, 116.255111),
+            (39.493375, 116.254579),
+        ]
+    }
+
+    /// 场地地形是平的，爬升量应是小量级。
+    ///
+    /// 用 open-meteo 的 DEM 在场地外接椭圆（160×120 m）上取 100 个点，海拔恒为
+    /// **27.00 m、跨度 0.00 m**；周边 1 km 内为 27–34 m。所以这座操场本身没有
+    /// 可计爬升的地形起伏，`totalAscent` 完全由传感器噪声贡献。
+    ///
+    /// 这条断言防的是「为了让爬升量看起来像真实记录而把噪声调大」：曾被调到
+    /// σ=1.0、2 km 给出 138 m 爬升，那是照着 bug 数据拟合的结果。
+    #[test]
+    fn flat_field_keeps_ascent_in_sensor_noise_range() {
+        for seed in [1915881480u64, 42, 7777] {
+            for dist in [2000.0, 3000.0, 4000.0] {
+                let dur = (dist / 1000.0 * 420.0) as i64;
+                let track = build(
+                    dist,
+                    dur,
+                    seed,
+                    (39.493, 116.255),
+                    1_792_916_403_089,
+                    &points(),
+                );
+                let ascent = altitude::total_ascent_of(&track);
+                let per_km = ascent / (track.totalDistance / 1000.0);
+                assert!(
+                    (0.0..=30.0).contains(&per_km),
+                    "seed={seed} dist={dist} 爬升 {ascent:.1} m / {per_km:.1} m/km 超出平坦场地合理范围"
+                );
+            }
+        }
+    }
+
+    /// 手动海拔覆盖后，爬升量必须由覆盖决定，而不是重算曲线。
+    #[test]
+    fn manual_altitude_determines_reported_ascent() {
+        let mut track = build(
+            2000.0,
+            840,
+            42,
+            (39.493, 116.255),
+            1_792_916_403_089,
+            &points(),
+        );
+
+        altitude::override_bd_a(&mut track, 27.0).unwrap();
+        assert_eq!(altitude::total_ascent_of(&track), 0.0, "固定海拔必须零爬升");
+
+        altitude::override_bd_a_range(
+            &mut track,
+            altitude::AltitudeRange {
+                min_m: 27.0,
+                max_m: 34.0,
+            },
+        )
+        .unwrap();
+        let ascent = altitude::total_ascent_of(&track);
+        assert!(
+            (ascent - 7.0).abs() < 1e-9,
+            "区间爬升应等于最高减最低，实际 {ascent}"
+        );
+    }
+}

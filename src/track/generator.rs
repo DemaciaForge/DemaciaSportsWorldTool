@@ -44,15 +44,14 @@ pub const SPEED_FIELD_DROP_KMH: (f64, f64) = (0.9, 2.2);
 pub const ALT_UNDULATION_M_PER_KM: f64 = 2.4;
 /// 逐点海拔噪声的标准差（米）。
 ///
-/// 实测量自 10 条真实记录（`real/obs_*.json`，2–4 km）：**爬升量 63–190 m**、
-/// 全程海拔带约 16 m。`totalAscent` 是把 `bdA` 的正差分累加，噪声越小累加出的
-/// 爬升越少——旧值 σ=0.12 只给出 14 m，低了一个量级。
+/// **未标定**：手上没有可信的真实跑步高程样本。曾用 `real/obs_*.json` 的
+/// 63–190 m 爬升去反解 σ=1.0，但那 10 条记录全部来自同一次 `--altitude 6-22`
+/// 手动区间覆盖（海拔带一律 6.00–22.00），爬升跨度是区间映射 bug 的放大产物，
+/// 不是真实世界分布，不能作为标定依据。
 ///
-/// 用随机游走模型反解（步数 180/350、软边界 ±8 m）：σ=1.0 对应 2 km≈71 m、
-/// 4 km≈138 m，落在真实区间内；σ=0.55 只有 38/74 m，明显偏低。
-pub const ALT_STEP_SIGMA_M: f64 = 1.0;
-/// 海拔随机游走的软边界（米）：偏离基线超过这个幅度就以 0.25 的系数回拉。
-pub const ALT_WANDER_LIMIT_M: f64 = 8.0;
+/// 暂取保守值：400 m 塑胶跑道是平的，真机融合高程在 2 km 上给出十几米以内的
+/// 累计爬升属正常量级。等有可信样本后再定。
+pub const ALT_STEP_SIGMA_M: f64 = 0.12;
 /// 单趟跑步里跑者离开路线再回来（喝水 / 系鞋带）的概率。
 pub const SIDE_TRIP_P: f64 = 0.10;
 
@@ -627,14 +626,9 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         let lap_phase = (cum_i / lap_len) * std::f64::consts::TAU;
         let phase = (lap_phase * 2.0 + 0.7 * speeds[i]).sin();
         let target_alt = alt0 + ALT_UNDULATION_M_PER_KM * (0.45 * lap_phase.sin() + 0.20 * phase);
-        // GPS 高程是**带噪声的随机游走**，不是平滑斜坡：真实记录的相邻差分离散度
-        // 远大于曲线本身的起伏。这里用 σ=0.55 的步进噪声 + 很弱的目标回拉（0.03）
-        // 复现这个特性，再用软边界把全程波动限制在 ±8 m 内。
-        alt += rng.gauss(0.0, ALT_STEP_SIGMA_M) + 0.03 * (target_alt - alt);
-        let dev = alt - alt0;
-        if dev.abs() > ALT_WANDER_LIMIT_M {
-            alt -= dev * 0.25;
-        }
+        // 高程读数 = 缓慢起伏的目标曲线 + 逐点噪声。回拉系数 0.35 让曲线紧贴目标，
+        // 不会自己漂走，因此不需要额外的边界约束。
+        alt += 0.35 * (target_alt - alt) + rng.gauss(0.0, ALT_STEP_SIGMA_M);
 
         locs[i].bdA = round_to(alt, 2);
         // 航向：本段前进方向 + 抖动
