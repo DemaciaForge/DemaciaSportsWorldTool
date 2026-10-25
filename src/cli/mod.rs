@@ -16,7 +16,7 @@ pub fn main(args: Vec<String>) -> i32 {
 
 fn usage() {
     println!(
-        r#"NekoSportsWorldTool CLI（full 构建无参数启动 GUI）
+        r#"DemaciaSportsWorldTool CLI（full 构建无参数启动 GUI）
 
   login   --user <手机号> --pass <密码> [--remember]
                                            登录并保存会话；--remember 同时保存凭据供自动重登

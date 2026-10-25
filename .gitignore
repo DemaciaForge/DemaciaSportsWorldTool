@@ -1,6 +1,6 @@
 /target
 Cargo.lock.bak
-nekosportsworldtool.log*
+demaciasportsworldtool.log*
 *.log.old
 
 # 运行时数据（含会话/凭据，禁止入库）
@@ -38,3 +38,6 @@ docs/_preview.png
 # 自动更新替换残留
 *.exe.old
 *.exe.new
+
+# 从服务器拉回的真实轨迹样本（含账号数据，不入库）
+real/

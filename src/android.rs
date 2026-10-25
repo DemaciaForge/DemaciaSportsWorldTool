@@ -48,7 +48,7 @@ fn android_main(app: AndroidApp) {
         event_loop_builder: Some(Box::new(move |builder| {
             builder.with_android_app(app);
         })),
-        viewport: egui::ViewportBuilder::default().with_title("NekoSportsWorldTool"),
+        viewport: egui::ViewportBuilder::default().with_title("DemaciaSportsWorldTool"),
         ..Default::default()
     };
     if let Err(error) = crate::run_gui(options) {

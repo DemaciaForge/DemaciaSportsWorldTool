@@ -1,17 +1,17 @@
 //! 自动更新：GitHub Release 检查 / 下载 / 解包 / 自替换。
 //!
-//! 桌面产物（win zip / mac tar.gz / linux tar.gz ×2）只查上游仓库；
-//! Android 查上游 + fork 两个仓库（上游发 APK 前先落在 fork，发了则
-//! 自动取更新的那个），取带 APK 资产且版本最新的 Release。
+//! 本项目自己的仓库：桌面与 Android 产物都从这里取。改名后资产前缀同时兼容
+//! 新名（`DemaciaSportsWorldTool-`）与旧名（`NekoSportsWorldTool-`），
+//! 因此换名前后发布的 Release 都能被识别。
 //! NSWT_UPDATE_REPO 环境变量可强制指定仓库（测试用）。
 //! 版本号 / 重启 / 安装的平台差异见 platform.rs。
 
 use crate::api::client::{make_agent, ureq_err};
 
-pub const REPO_UPSTREAM: &str = "YanamiNeko/NekoSportsWorldTool";
-pub const REPO_FORK: &str = "hb-degithub/NekoSportsWorldTool";
+/// 分发仓库。GitHub 上把仓库改名后只需改这一处。
+pub const REPO: &str = "DemaciaForge/NekoSportsWorldTool";
 
-const UA: &str = concat!("NekoSportsWorldTool/", env!("CARGO_PKG_VERSION"));
+const UA: &str = concat!("DemaciaSportsWorldTool/", env!("CARGO_PKG_VERSION"));
 
 /// Android 更新包落盘文件名（私有目录，ApkProvider 只暴露这一个文件）。
 pub const APK_NAME: &str = "update.apk";
@@ -23,15 +23,23 @@ fn repos() -> Vec<String> {
             return vec![r.trim().to_string()];
         }
     }
-    #[cfg(target_os = "android")]
-    let list = [REPO_UPSTREAM, REPO_FORK];
-    #[cfg(not(target_os = "android"))]
-    let list = [REPO_UPSTREAM];
-    list.iter().map(|s| s.to_string()).collect()
+    vec![REPO.to_string()]
 }
 
 /// 当前平台对应的 Release 资产名；无匹配产物的平台返回 None。
 pub fn asset_name() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => Some("DemaciaSportsWorldTool-win-x64.zip"),
+        ("macos", "aarch64") => Some("DemaciaSportsWorldTool-macos-arm64.tar.gz"),
+        ("linux", "x86_64") => Some("DemaciaSportsWorldTool-linux-x64.tar.gz"),
+        ("linux", "aarch64") => Some("DemaciaSportsWorldTool-linux-aarch64.tar.gz"),
+        ("android", "aarch64") => Some("DemaciaSportsWorldTool-android-arm64.apk"),
+        _ => None,
+    }
+}
+
+/// 改名前的旧资产名（同一平台）；用于兼容改名之前发布的 Release。
+fn legacy_asset_name() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => Some("NekoSportsWorldTool-win-x64.zip"),
         ("macos", "aarch64") => Some("NekoSportsWorldTool-macos-arm64.tar.gz"),
@@ -131,7 +139,10 @@ fn fetch_release(
     if tag.is_empty() {
         return Err("Release 缺少 tag".into());
     }
-    let Some(asset) = pick_asset(&v, want) else {
+    // 先按新名找，找不到再按改名前的旧名找——这样改名前后发布的 Release 都认。
+    let Some(asset) = pick_asset(&v, want)
+        .or_else(|| legacy_asset_name().and_then(|legacy| pick_asset(&v, legacy)))
+    else {
         return Ok(None);
     };
     log(&format!(
@@ -241,7 +252,7 @@ pub fn download(url: &str, mut progress: impl FnMut(u64, Option<u64>)) -> Result
 }
 
 /// 从发布包解出新程序二进制。桌面：zip 内找 *.exe（7z 打包带 target/
-/// 目录前缀，取最大的一条）；tar.gz 内找根级 nekosportsworldtool。
+/// 目录前缀，取最大的一条）；tar.gz 内找根级 demaciasportsworldtool。
 #[cfg(not(target_os = "android"))]
 pub fn extract(asset_name: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
     if asset_name.ends_with(".zip") {
@@ -304,7 +315,7 @@ fn extract_tar_gz(bytes: &[u8]) -> Result<Vec<u8>, String> {
             continue;
         }
         let path = e.path().map_err(|e| format!("tar 路径异常: {e}"))?;
-        if path.file_name().and_then(|n| n.to_str()) != Some("nekosportsworldtool") {
+        if path.file_name().and_then(|n| n.to_str()) != Some("demaciasportsworldtool") {
             continue;
         }
         let mut out = Vec::new();
@@ -401,24 +412,24 @@ mod tests {
             })
         };
         let exact = pick_asset(
-            &mk(&["NekoSportsWorldTool-win-x64.zip", "other.txt"]),
-            "NekoSportsWorldTool-win-x64.zip",
+            &mk(&["DemaciaSportsWorldTool-win-x64.zip", "other.txt"]),
+            "DemaciaSportsWorldTool-win-x64.zip",
         );
-        assert_eq!(exact.unwrap().name, "NekoSportsWorldTool-win-x64.zip");
+        assert_eq!(exact.unwrap().name, "DemaciaSportsWorldTool-win-x64.zip");
         // 桌面产物必须精确匹配
-        assert!(pick_asset(&mk(&["wrong.zip"]), "NekoSportsWorldTool-win-x64.zip").is_none());
+        assert!(pick_asset(&mk(&["wrong.zip"]), "DemaciaSportsWorldTool-win-x64.zip").is_none());
         // APK 模糊匹配：先精确、再 arm64、再任意 apk
         let apk = pick_asset(
-            &mk(&["NekoSportsWorldTool-0.2.5-android.2-arm64.apk"]),
-            "NekoSportsWorldTool-android-arm64.apk",
+            &mk(&["DemaciaSportsWorldTool-0.2.5-android.2-arm64.apk"]),
+            "DemaciaSportsWorldTool-android-arm64.apk",
         );
         assert_eq!(
             apk.unwrap().name,
-            "NekoSportsWorldTool-0.2.5-android.2-arm64.apk"
+            "DemaciaSportsWorldTool-0.2.5-android.2-arm64.apk"
         );
         let any = pick_asset(
             &mk(&["app-arm64.apk", "plain.apk"]),
-            "NekoSportsWorldTool-android-arm64.apk",
+            "DemaciaSportsWorldTool-android-arm64.apk",
         );
         assert_eq!(any.unwrap().name, "app-arm64.apk");
     }
@@ -432,7 +443,7 @@ mod tests {
             let opt = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             w.start_file(
-                "target/x86_64-pc-windows-msvc/release/nekosportsworldtool.exe",
+                "target/x86_64-pc-windows-msvc/release/demaciasportsworldtool.exe",
                 opt,
             )
             .unwrap();
@@ -444,7 +455,7 @@ mod tests {
         let bytes = buf.into_inner();
         assert_eq!(extract_zip(&bytes).unwrap(), b"BIN_CONTENT");
         assert_eq!(
-            extract("NekoSportsWorldTool-win-x64.zip", &bytes).unwrap(),
+            extract("DemaciaSportsWorldTool-win-x64.zip", &bytes).unwrap(),
             b"BIN_CONTENT"
         );
     }
@@ -461,14 +472,14 @@ mod tests {
             hdr.set_size(content.len() as u64);
             hdr.set_mode(0o755);
             hdr.set_cksum();
-            tar.append_data(&mut hdr, "nekosportsworldtool", content)
+            tar.append_data(&mut hdr, "demaciasportsworldtool", content)
                 .unwrap();
             let gz = tar.into_inner().unwrap();
             gz.finish().unwrap();
         }
         assert_eq!(extract_tar_gz(&bytes).unwrap(), b"BIN_CONTENT");
         assert_eq!(
-            extract("NekoSportsWorldTool-linux-x64.tar.gz", &bytes).unwrap(),
+            extract("DemaciaSportsWorldTool-linux-x64.tar.gz", &bytes).unwrap(),
             b"BIN_CONTENT"
         );
     }

@@ -22,7 +22,7 @@ mod android;
 #[cfg(feature = "gui")]
 pub fn run_gui(options: eframe::NativeOptions) -> eframe::Result<()> {
     eframe::run_native(
-        "NekoSportsWorldTool",
+        "DemaciaSportsWorldTool",
         options,
         Box::new(|cc| {
             #[cfg(target_os = "android")]

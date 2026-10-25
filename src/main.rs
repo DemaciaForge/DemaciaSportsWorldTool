@@ -1,7 +1,7 @@
-//! NekoSportsWorldTool：无参数启动 GUI，带子命令进入 CLI（青龙等定时任务用）。
+//! DemaciaSportsWorldTool：无参数启动 GUI，带子命令进入 CLI（青龙等定时任务用）。
 //! full 构建（默认）含 GUI + CLI；`--no-default-features` 仅 CLI。
 
-use nekosportsworldtool::cli;
+use demaciasportsworldtool::cli;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -10,7 +10,7 @@ fn main() {
         run_gui();
         #[cfg(not(feature = "gui"))]
         {
-            eprintln!("当前为 CLI 构建，子命令用法：nekosportsworldtool help");
+            eprintln!("当前为 CLI 构建，子命令用法：demaciasportsworldtool help");
             std::process::exit(1);
         }
     } else {
@@ -39,10 +39,10 @@ fn run_gui() {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([880.0, 720.0])
-            .with_title("NekoSportsWorldTool"),
+            .with_title("DemaciaSportsWorldTool"),
         ..Default::default()
     };
-    let result = nekosportsworldtool::run_gui(options);
+    let result = demaciasportsworldtool::run_gui(options);
     if let Err(e) = result {
         eprintln!("GUI 启动失败: {e}");
         std::process::exit(1);

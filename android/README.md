@@ -5,7 +5,7 @@ Android 移植保留 Rust 业务逻辑、桌面 GUI/CLI 与七个功能页面。
 ## 使用方式
 
 - 面向 Android 16（target SDK 36）的 ARM64 手机；声明最低 API 26，旧系统未进行设备验收。
-- 安装 `build/arm64-v8a-release/NekoSportsWorldTool-arm64-v8a.apk`。这是本地测试签名包，允许手动安装后即可打开。
+- 安装 `build/arm64-v8a-release/DemaciaSportsWorldTool-arm64-v8a.apk`。这是本地测试签名包，允许手动安装后即可打开。
 - 点击账号、密码或数值字段，会弹出 Android 原生编辑框，使用手机当前默认输入法；“确定”或键盘完成键回填，“取消”保留原值。
 - 首次启动询问是否读取本机品牌、型号和系统版本：同意后保存，拒绝后仍可手填。设备页可再次询问并读取，手动读取需点击“保存”才生效。
 - 品牌作为独立字段保存在 `identity.json`，重启后可在设备页查看和编辑，仅供本地展示；服务端请求保持原有机型字段。旧版配置缺少品牌时按空值加载，可再次读取并保存，已有 UUID 不变。
@@ -20,17 +20,17 @@ Android 移植保留 Rust 业务逻辑、桌面 GUI/CLI 与七个功能页面。
 
 ```powershell
 ./android/release.ps1 -AndroidRev 4                       # 发到 fork（默认）
-./android/release.ps1 -AndroidRev 5 -Repo YanamiNeko/NekoSportsWorldTool -Notes "..."
+./android/release.ps1 -AndroidRev 5 -Repo DemaciaForge/DemaciaSportsWorldTool -Notes "..."
 ```
 
-脚本会读 Cargo.toml 版本、盖章 AndroidManifest（versionName=`<版本>-android.<N>`）、构建 arm64 并以固定资产名 `NekoSportsWorldTool-android-arm64.apk` 上传。**必须一直用同一个签名密钥**（`android/.signing/local-test.keystore`）：签名变化后手机无法覆盖安装，卸载重装还会丢 identity/session。
+脚本会读 Cargo.toml 版本、盖章 AndroidManifest（versionName=`<版本>-android.<N>`）、构建 arm64 并以固定资产名 `DemaciaSportsWorldTool-android-arm64.apk` 上传。**必须一直用同一个签名密钥**（`android/.signing/local-test.keystore`）：签名变化后手机无法覆盖安装，卸载重装还会丢 identity/session。
 
 ## CI 自动构建（`.github/workflows/apk.yml`）
 
 推送 main 或 tag（`v*`）时在 Ubuntu runner 上自动构建 arm64 APK，流程为本目录 `build.ps1` 的 Linux 移植（NDK 29 交叉编译、ELF 16KB 对齐检查、javac/d8/aapt2/zipalign/apksigner 校验）：
 
 - **main / 手动触发**：仅产出 Actions 构建产物（不发布），用于验证 Android 链路可编译；无签名 Secret 时用一次性调试密钥，仅供冒烟安装。
-- **tag 触发**（如 `v0.2.6` 或 `v0.2.6-android.2`）：自动盖章版本（以 tag 为准，`<版本>-android.<rev>`，versionCode 编码与 release.ps1 相同），并把 `NekoSportsWorldTool-android-arm64.apk` 挂到该 tag 的 Release——Android 端自更新按此资产名精确匹配。
+- **tag 触发**（如 `v0.2.6` 或 `v0.2.6-android.2`）：自动盖章版本（以 tag 为准，`<版本>-android.<rev>`，versionCode 编码与 release.ps1 相同），并把 `DemaciaSportsWorldTool-android-arm64.apk` 挂到该 tag 的 Release——Android 端自更新按此资产名精确匹配。
 
 **发布前必须配置仓库 Secret `ANDROID_KEYSTORE_BASE64`**（签名 keystore 文件的 base64，建议直接用 `android/.signing/local-test.keystore` 以保持与历史 APK 签名连续；可选 `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`，默认 `android` / `androiddebugkey` / `android`）。tag 构建缺失该 Secret 会直接失败——换密钥静默发布会让所有已装用户无法覆盖安装。生成 base64：
 
@@ -71,7 +71,7 @@ rustup target add x86_64-linux-android
 ./android/build.ps1 -Abi x86_64 -Profile debug
 # 先启动 Android 16 x86_64 模拟器，用 adb devices 查看实际序列号：
 $serial = 'emulator-5554' # 替换为你的模拟器序列号
-adb -s $serial install -r ./android/build/x86_64-debug/NekoSportsWorldTool-x86_64.apk
+adb -s $serial install -r ./android/build/x86_64-debug/DemaciaSportsWorldTool-x86_64.apk
 ./android/test.ps1 -Serial $serial
 ```
 

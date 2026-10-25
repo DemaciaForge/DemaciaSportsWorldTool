@@ -1,10 +1,10 @@
 [package]
-name = "nekosportsworldtool"
+name = "demaciasportsworldtool"
 version = "0.4.1"
 edition = "2021"
-description = "NekoSportsWorldTool：运动世界校园版协议自动化工具（GUI + CLI）"
+description = "DemaciaSportsWorldTool：运动世界校园版协议自动化工具（GUI + CLI）"
 license = "CC-BY-NC-4.0"
-repository = "https://github.com/YanamiNeko/NekoSportsWorldTool"
+repository = "https://github.com/DemaciaForge/DemaciaSportsWorldTool"
 
 [workspace]
 members = [".", "crates/route-planner"]

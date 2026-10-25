@@ -58,7 +58,7 @@
 ## 📦 下载
 
 ### Windows (x64)
-- `NekoSportsWorldTool-v0.4.1-windows-x64.zip`
+- `DemaciaSportsWorldTool-v0.4.1-windows-x64.zip`
 
 ### 源代码
 - `Source code (zip)`

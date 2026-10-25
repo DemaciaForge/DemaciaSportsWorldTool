@@ -19,7 +19,7 @@ export "CC_${target_key}=$NDK_BIN/${TARGET}26-clang"
 export "AR_${target_key}=$NDK_BIN/llvm-ar"
 export "CARGO_TARGET_${target_key^^}_RUSTFLAGS=-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384"
 cargo build --locked --release --target "$TARGET" --features android --lib
-so="target/$TARGET/release/libnekosportsworldtool.so"
+so="target/$TARGET/release/libdemaciasportsworldtool.so"
 aligns="$("$NDK_BIN/llvm-readelf" -lW "$so" | awk '/^ *LOAD /{print $NF}')"
 test -n "$aligns"
 for alignment in $aligns; do
@@ -38,9 +38,9 @@ jar cf "$PACKAGE_DIR/classes.jar" -C "$PACKAGE_DIR/classes" .
 "$BT/aapt2" compile --dir "$PACKAGE_DIR/res" -o "$PACKAGE_DIR/resources.zip"
 "$BT/aapt2" link -o "$PACKAGE_DIR/unsigned.apk" -I "$ANDROID_JAR" \
     --manifest "$PACKAGE_DIR/AndroidManifest.xml" "$PACKAGE_DIR/resources.zip"
-cp "$so" "$PACKAGE_DIR/staging/lib/$ABI/libnekosportsworldtool.so"
+cp "$so" "$PACKAGE_DIR/staging/lib/$ABI/libdemaciasportsworldtool.so"
 cp "$PACKAGE_DIR/dex/classes.dex" "$PACKAGE_DIR/staging/classes.dex"
-(cd "$PACKAGE_DIR/staging" && zip -q -X ../unsigned.apk classes.dex "lib/$ABI/libnekosportsworldtool.so")
+(cd "$PACKAGE_DIR/staging" && zip -q -X ../unsigned.apk classes.dex "lib/$ABI/libdemaciasportsworldtool.so")
 "$BT/zipalign" -f -P 16 4 "$PACKAGE_DIR/unsigned.apk" "$PACKAGE_DIR/aligned.apk"
 "$BT/apksigner" sign --ks "$KEYSTORE" --ks-key-alias androiddebugkey \
     --ks-pass pass:android --key-pass pass:android --out "$PACKAGE_DIR/app.apk" "$PACKAGE_DIR/aligned.apk"

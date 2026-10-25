@@ -11,12 +11,12 @@
 
 .EXAMPLE
 ./android/release.ps1 -AndroidRev 4                        # 发到 fork
-./android/release.ps1 -AndroidRev 4 -Repo YanamiNeko/NekoSportsWorldTool -Notes "修复"
+./android/release.ps1 -AndroidRev 4 -Repo DemaciaForge/DemaciaSportsWorldTool -Notes "修复"
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][ValidateRange(1, 99)][int]$AndroidRev,
-    [string]$Repo = 'hb-degithub/NekoSportsWorldTool',
+    [string]$Repo = 'DemaciaForge/DemaciaSportsWorldTool',
     [string]$Notes = '',
     [switch]$Draft,
     [switch]$SkipBuild
@@ -53,11 +53,11 @@ if (-not $SkipBuild) {
     & (Join-Path $PSScriptRoot 'build.ps1') -Abi arm64-v8a -Profile release
     if ($LASTEXITCODE -ne 0) { throw 'build.ps1 失败' }
 }
-$builtApk = Join-Path $PSScriptRoot 'build\arm64-v8a-release\NekoSportsWorldTool-arm64-v8a.apk'
+$builtApk = Join-Path $PSScriptRoot 'build\arm64-v8a-release\DemaciaSportsWorldTool-arm64-v8a.apk'
 if (-not (Test-Path -LiteralPath $builtApk)) { throw "找不到构建产物：$builtApk" }
 
 # 固定资产名（更新器按此匹配；也兼容任意 *.apk 资产）
-$asset = Join-Path $PSScriptRoot 'build\NekoSportsWorldTool-android-arm64.apk'
+$asset = Join-Path $PSScriptRoot 'build\DemaciaSportsWorldTool-android-arm64.apk'
 Copy-Item -LiteralPath $builtApk -Destination $asset -Force
 
 # ── 发布 ────────────────────────────────────────────────────
@@ -65,11 +65,11 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw "未安装 gh CLI。手动发布：`ngh release create v$versionName --repo $Repo --latest `"$asset`""
 }
 if ([string]::IsNullOrWhiteSpace($Notes)) {
-    $Notes = "NekoSportsWorldTool $versionName`n`n签名密钥未变，可直接覆盖安装。"
+    $Notes = "DemaciaSportsWorldTool $versionName`n`n签名密钥未变，可直接覆盖安装。"
 }
 $tag = "v$versionName"
 $arguments = @('release', 'create', $tag, '--repo', $Repo, '--latest',
-    '--title', "NekoSportsWorldTool $versionName", '--notes', $Notes)
+    '--title', "DemaciaSportsWorldTool $versionName", '--notes', $Notes)
 if ($Draft) { $arguments += '--draft' }
 $arguments += $asset
 Write-Output "gh $($arguments -join ' ')"

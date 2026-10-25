@@ -74,7 +74,7 @@
 
 3. **发布权限治理** (`apk.yml`, `release.yml`):
    - 发布条件从 `startsWith(github.ref, 'refs/tags/')` 改为
-     `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.repository == 'YanamiNeko/NekoSportsWorldTool'`
+     `github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.repository == 'DemaciaForge/DemaciaSportsWorldTool'`
    - fork 和非 push 事件只上传 artifact，不创建 Release
    - 上游 tag 发布仍需 `ANDROID_KEYSTORE_BASE64` Secret，fork 可用临时密钥
 

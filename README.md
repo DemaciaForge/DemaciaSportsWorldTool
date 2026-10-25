@@ -1,9 +1,9 @@
 <h1 style="font-size: 48px;">别倒卖了😭</h1>
 
-# NekoSportsWorldTool
+# DemaciaSportsWorldTool
 
-![Release](https://img.shields.io/github/v/release/YanamiNeko/NekoSportsWorldTool)
-![Build](https://github.com/YanamiNeko/NekoSportsWorldTool/actions/workflows/release.yml/badge.svg)
+![Release](https://img.shields.io/github/v/release/DemaciaForge/DemaciaSportsWorldTool)
+![Build](https://github.com/DemaciaForge/DemaciaSportsWorldTool/actions/workflows/release.yml/badge.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
 运动世界校园版全协议自动化工具，纯 Rust 单文件，GUI / CLI 双模式。
@@ -35,16 +35,16 @@
 双击 exe 进入 GUI；CLI 用法：
 
 ```text
-NekoSportsWorldTool login --user <手机号> --pass <密码> --remember
-NekoSportsWorldTool run                                  # 一键跑步（--altitude 17.2 固定海拔，或 11.6-22.8 映射到区间）
-NekoSportsWorldTool run --dry-run --dist 2 --pace 360 --lat 39.9 --lon 116.4
+DemaciaSportsWorldTool login --user <手机号> --pass <密码> --remember
+DemaciaSportsWorldTool run                                  # 一键跑步（--altitude 17.2 固定海拔，或 11.6-22.8 映射到区间）
+DemaciaSportsWorldTool run --dry-run --dist 2 --pace 360 --lat 39.9 --lon 116.4
                                                          # 本地生成并校验轨迹/五点/OBS，不登录、不联网、不上传
-NekoSportsWorldTool run --track-color full-green         # 全绿色（默认）；也可选 half-green-gray
-NekoSportsWorldTool ai --sport 2 --score 26000           # AI 运动
-NekoSportsWorldTool rank main --type 1 --sort 1          # 排行榜
-NekoSportsWorldTool update [--check]           # 自动更新（--check 仅检查不下载）
-NekoSportsWorldTool template --file run.gpx   # 本地分析真实记录海拔（不会上传）
-NekoSportsWorldTool help                                 # 全部命令
+DemaciaSportsWorldTool run --track-color full-green         # 全绿色（默认）；也可选 half-green-gray
+DemaciaSportsWorldTool ai --sport 2 --score 26000           # AI 运动
+DemaciaSportsWorldTool rank main --type 1 --sort 1          # 排行榜
+DemaciaSportsWorldTool update [--check]           # 自动更新（--check 仅检查不下载）
+DemaciaSportsWorldTool template --file run.gpx   # 本地分析真实记录海拔（不会上传）
+DemaciaSportsWorldTool help                                 # 全部命令
 ```
 
 `template` 只读取用户手动选择的本地 GPX/JSON 文件，输出采样点、海拔范围、累计上升和累计下降，
@@ -63,8 +63,8 @@ NekoSportsWorldTool help                                 # 全部命令
 - **10121 设备风险**：设备身份是持久化的，删除 `identity.json` 等于换了新设备，不要频繁删
 - **10603 点位限流**：点位接口 5 分钟限 3 次，程序内置 300s 缓存，正常使用不会触发
 - **榜单为空**：当天还没有人产生有效里程，查询会自动回退最近 3 天
-- **检查更新失败**：更新仅直连 GitHub，网络不通时到 [Release](https://github.com/YanamiNeko/NekoSportsWorldTool/releases) 手动下载
-- **手动更新方式**：Windows 下载新的 `nekosportsworldtool.exe` 后退出软件，用新文件替换旧文件；请保留 `config.json`、`identity.json`、`points_cache.json` 等配置文件，不要删除或修改。
+- **检查更新失败**：更新仅直连 GitHub，网络不通时到 [Release](https://github.com/DemaciaForge/DemaciaSportsWorldTool/releases) 手动下载
+- **手动更新方式**：Windows 下载新的 `demaciasportsworldtool.exe` 后退出软件，用新文件替换旧文件；请保留 `config.json`、`identity.json`、`points_cache.json` 等配置文件，不要删除或修改。
 - **人机验证失败**：自动重试 3 轮，仍失败大概率是网络波动，稍后再试
 - **杀软误报**：未签名编译产物可能被误报，自行判断后加白
 
@@ -85,4 +85,13 @@ cargo test --all
 
 ## 许可证
 
-[CC BY-NC 4.0](LICENSE) © YanamiNeko（禁止商用）
+[CC BY-NC 4.0](LICENSE)（禁止商用）
+
+本项目是 [NekoSportsWorldTool](https://github.com/YanamiNeko/NekoSportsWorldTool) 的衍生作品：
+
+- 原作者：YanamiNeko © 2026
+- 本衍生作品修改者：DemaciaForge © 2026
+
+按 CC BY-NC 4.0 的署名要求，分发或再修改时需同时保留上述两处署名。
+本衍生作品的改动集中在轨迹生成、协议载荷与真实性校验，详见提交历史。
+

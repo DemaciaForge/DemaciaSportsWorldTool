@@ -1467,11 +1467,24 @@ mod tests {
             .unwrap()
             .timestamp_millis();
         let now_ms = crate::crypto::envelope::now_ms();
-        assert_eq!(plan.start_ms, typed.min(now_ms));
+        // `ensure_plan` 取的是它执行那一刻的 now，这里再读一次必然略晚，
+        // 所以不能要求两者毫秒相等（全量跑时因为耗时更长，会偶发失败）。
+        // 真正的不变量是：起跑时刻没有落到未来。
+        assert!(
+            plan.start_ms <= now_ms,
+            "起跑时刻 {} 被排到了未来（当前 {}）",
+            plan.start_ms,
+            now_ms
+        );
         assert_start_not_future(&plan);
         // 界面提示条件：填入时刻晚于现在（23:59 总成立，除非正好在那一分钟）
         if typed > now_ms {
             assert!(plan.start_ms < typed, "未来时刻未被钳制");
+            assert!(
+                now_ms - plan.start_ms < 5_000,
+                "钳制后的时刻偏离当前时间过远（差 {} ms）",
+                now_ms - plan.start_ms
+            );
         }
     }
 

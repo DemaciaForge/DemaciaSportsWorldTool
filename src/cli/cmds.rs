@@ -304,7 +304,7 @@ fn cmd_route(rest: &[&str]) -> i32 {
 fn write_gpx(path: &str, ring: &crate::track::custom::CustomRing) -> Result<(), String> {
     let mut body = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <gpx version=\"1.1\" creator=\"NekoSportsWorldTool\">\n  <trk><name>custom-route</name><trkseg>\n",
+         <gpx version=\"1.1\" creator=\"DemaciaSportsWorldTool\">\n  <trk><name>custom-route</name><trkseg>\n",
     );
     for &(la, lo) in &ring.points_bd {
         let (glat, glng) = crate::track::wire::bd09_to_gcj02(la, lo);

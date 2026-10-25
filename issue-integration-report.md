@@ -90,12 +90,12 @@
 
 为了方便社区测试，我已在个人 fork 中发布了整合版本：
 
-**发布地址**：https://github.com/DemaciaForge/NekoSportsWorldTool/releases/tag/v0.4.0
+**发布地址**：https://github.com/DemaciaForge/DemaciaSportsWorldTool/releases/tag/v0.4.0
 
 **提交 SHA**：`992c08b68a4145912030d9e015e17178a773a33e`
 
 **下载信息**：
-- 文件：`NekoSportsWorldTool-v0.4.0-windows-x64.tar.gz`（4.0 MB）
+- 文件：`DemaciaSportsWorldTool-v0.4.0-windows-x64.tar.gz`（4.0 MB）
 - SHA256：`11f270616b22b44c02c2d66abaec866cfad0ef94c315f9469b859e6ed6228cec`
 - 平台：Windows x64
 
@@ -180,7 +180,7 @@
 ## 📝 详细文档
 
 完整的审核记录和技术细节请见：
-- **Release Notes**：https://github.com/DemaciaForge/NekoSportsWorldTool/releases/tag/v0.4.0
+- **Release Notes**：https://github.com/DemaciaForge/DemaciaSportsWorldTool/releases/tag/v0.4.0
 - **审核记录**：包含在 fork 仓库中（`审核记录-v0.4.0.md`）
 
 ---

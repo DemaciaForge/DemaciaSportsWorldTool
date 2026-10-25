@@ -71,7 +71,7 @@ try {
 } finally {
     foreach ($entry in $savedEnvironment.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process') }
 }
-$nativeLibrary = Join-Path $TargetDir "$targetTriple\$Profile\libnekosportsworldtool.so"
+$nativeLibrary = Join-Path $TargetDir "$targetTriple\$Profile\libdemaciasportsworldtool.so"
 if (-not (Test-Path -LiteralPath $nativeLibrary)) { throw "Missing native library: $nativeLibrary" }
 
 $programHeaders = & (Join-Path $ndkBin 'llvm-readelf.exe') '-lW' $nativeLibrary
@@ -98,12 +98,12 @@ Invoke-Checked (Join-Path $buildTools 'aapt2.exe') @('link','-o',$unsignedApk,'-
 # Add only the declared native library and dex. No workspace JSON or credentials.
 $libDir = Join-Path $stagingDir "lib\$Abi"
 New-Item -ItemType Directory -Force -Path $libDir | Out-Null
-Copy-Item -LiteralPath $nativeLibrary -Destination (Join-Path $libDir 'libnekosportsworldtool.so') -Force
+Copy-Item -LiteralPath $nativeLibrary -Destination (Join-Path $libDir 'libdemaciasportsworldtool.so') -Force
 Copy-Item -LiteralPath (Join-Path $dexDir 'classes.dex') -Destination (Join-Path $stagingDir 'classes.dex') -Force
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [IO.Compression.ZipFile]::Open($unsignedApk, [IO.Compression.ZipArchiveMode]::Update)
 try {
-    foreach ($relative in @('classes.dex', "lib/$Abi/libnekosportsworldtool.so")) {
+    foreach ($relative in @('classes.dex', "lib/$Abi/libdemaciasportsworldtool.so")) {
         $oldEntry = $zip.GetEntry($relative)
         if ($oldEntry) { $oldEntry.Delete() }
         [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $stagingDir $relative), $relative, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
@@ -115,7 +115,7 @@ $keyStore = Join-Path $signingDir 'local-test.keystore'
 if (-not (Test-Path -LiteralPath $keyStore)) {
     Invoke-Checked (Join-Path $javaBin 'keytool.exe') @('-genkeypair','-keystore',$keyStore,'-storepass','android','-keypass','android','-alias','androiddebugkey','-keyalg','RSA','-keysize','2048','-validity','10000','-dname','CN=Android Debug,O=Android,C=US')
 }
-$finalApk = Join-Path $outputDir "NekoSportsWorldTool-$Abi.apk"
+$finalApk = Join-Path $outputDir "DemaciaSportsWorldTool-$Abi.apk"
 Invoke-Checked (Join-Path $buildTools 'apksigner.bat') @('sign','--ks',$keyStore,'--ks-key-alias','androiddebugkey','--ks-pass','pass:android','--key-pass','pass:android','--out',$finalApk,$alignedApk)
 Invoke-Checked (Join-Path $buildTools 'apksigner.bat') @('verify','--verbose',$finalApk)
 Invoke-Checked (Join-Path $buildTools 'zipalign.exe') @('-c','-P','16','4',$finalApk)

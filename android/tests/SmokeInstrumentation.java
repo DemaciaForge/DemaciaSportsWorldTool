@@ -1,4 +1,4 @@
-package org.nekosportsworld.tool.tests;
+package org.demaciasportsworld.tool.tests;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -11,7 +11,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
-import org.nekosportsworld.tool.MainActivity;
+import org.demaciasportsworld.tool.MainActivity;
 
 /** Offline Android integration checks. Never logs in or submits business data. */
 public final class SmokeInstrumentation extends Instrumentation {
@@ -85,7 +85,7 @@ public final class SmokeInstrumentation extends Instrumentation {
                 // A second instrumentation invocation starts a fresh app process.
                 org.json.JSONObject before = readIdentity(getTargetContext());
                 check(android.os.Build.MANUFACTURER.equals(before.getString("manufacturer")), "previous process persisted the real brand");
-                Intent restart = new Intent().setClassName("org.nekosportsworld.tool", "org.nekosportsworld.tool.MainActivity");
+                Intent restart = new Intent().setClassName("org.demaciasportsworld.tool", "org.demaciasportsworld.tool.MainActivity");
                 restart.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 MainActivity restarted = (MainActivity) startActivitySync(restart);
                 awaitUi(restarted::hasWindowFocus, "fresh process window focus");
@@ -101,7 +101,7 @@ public final class SmokeInstrumentation extends Instrumentation {
             // so denial, first-run consent and UUID reuse are exercised on every run.
             getTargetContext().getSharedPreferences("device_info", 0).edit().clear().commit();
             java.nio.file.Files.deleteIfExists(new java.io.File(getTargetContext().getFilesDir(), "identity.json").toPath());
-            Intent launch = new Intent().setClassName("org.nekosportsworld.tool", "org.nekosportsworld.tool.MainActivity");
+            Intent launch = new Intent().setClassName("org.demaciasportsworld.tool", "org.demaciasportsworld.tool.MainActivity");
             launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             MainActivity activity = (MainActivity) startActivitySync(launch);
             waitForIdleSync();

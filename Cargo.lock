@@ -950,6 +950,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "demaciasportsworldtool"
+version = "0.4.1"
+dependencies = [
+ "aes",
+ "android-activity",
+ "android_logger",
+ "base64",
+ "cbc",
+ "chrono",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "flate2",
+ "image",
+ "jni 0.21.1",
+ "log",
+ "md-5",
+ "rand 0.8.8",
+ "rand_distr",
+ "rfd",
+ "route-planner",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "ureq",
+ "uuid",
+ "winit",
+ "zip",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2366,39 +2399,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
-]
-
-[[package]]
-name = "nekosportsworldtool"
-version = "0.4.1"
-dependencies = [
- "aes",
- "android-activity",
- "android_logger",
- "base64",
- "cbc",
- "chrono",
- "eframe",
- "egui",
- "egui_extras",
- "flate2",
- "image",
- "jni 0.21.1",
- "log",
- "md-5",
- "rand 0.8.8",
- "rand_distr",
- "rfd",
- "route-planner",
- "rsa",
- "serde",
- "serde_json",
- "sha2",
- "tar",
- "ureq",
- "uuid",
- "winit",
- "zip",
 ]
 
 [[package]]

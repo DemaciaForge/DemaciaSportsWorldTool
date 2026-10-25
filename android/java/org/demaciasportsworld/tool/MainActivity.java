@@ -1,4 +1,4 @@
-package org.nekosportsworld.tool;
+package org.demaciasportsworld.tool;
 
 import android.app.AlertDialog;
 import android.app.NativeActivity;
@@ -14,7 +14,7 @@ import android.widget.FrameLayout;
 
 /** Android UI thread owns the real text editor; Rust owns application state. */
 public final class MainActivity extends NativeActivity {
-    static { System.loadLibrary("nekosportsworldtool"); }
+    static { System.loadLibrary("demaciasportsworldtool"); }
     private AlertDialog editorDialog;
     private AlertDialog deviceInfoDialog;
     private boolean taskActive;
@@ -171,7 +171,7 @@ public final class MainActivity extends NativeActivity {
         runOnUiThread(() -> {
             android.content.ClipboardManager clipboard =
                 (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("NekoSportsWorldTool", text));
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("DemaciaSportsWorldTool", text));
         });
     }
 

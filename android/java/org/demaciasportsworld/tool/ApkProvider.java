@@ -1,4 +1,4 @@
-package org.nekosportsworld.tool;
+package org.demaciasportsworld.tool;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
@@ -13,7 +13,7 @@ import java.io.FileNotFoundException;
  * 不引 androidx，按需最小实现其余 ContentProvider 抽象方法。
  */
 public final class ApkProvider extends ContentProvider {
-    public static final String AUTHORITY = "org.nekosportsworld.tool.apk";
+    public static final String AUTHORITY = "org.demaciasportsworld.tool.apk";
     public static final String FILE_NAME = "update.apk";
 
     public static Uri uriForUpdate() {

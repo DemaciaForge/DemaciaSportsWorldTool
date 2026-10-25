@@ -37,12 +37,12 @@ jar cf "$out/tests.jar" -C "$out/classes" .
 "${adb_cmd[@]}" shell input keyevent 224
 "${adb_cmd[@]}" shell wm dismiss-keyguard
 "${adb_cmd[@]}" logcat -c
-"${adb_cmd[@]}" shell am start -W -n org.nekosportsworld.tool/.MainActivity > "$diagnostics/launch.txt"
-pid="$("${adb_cmd[@]}" shell pidof org.nekosportsworld.tool | tr -d '\r')"
+"${adb_cmd[@]}" shell am start -W -n org.demaciasportsworld.tool/.MainActivity > "$diagnostics/launch.txt"
+pid="$("${adb_cmd[@]}" shell pidof org.demaciasportsworld.tool | tr -d '\r')"
 test -n "$pid"
 for ((second = 0; second < 70; second++)); do
     sleep 1
-    current="$("${adb_cmd[@]}" shell pidof org.nekosportsworld.tool | tr -d '\r')"
+    current="$("${adb_cmd[@]}" shell pidof org.demaciasportsworld.tool | tr -d '\r')"
     if [[ "$current" != "$pid" ]]; then echo 'App died or restarted during the 70-second startup check'; exit 1; fi
 done
 "${adb_cmd[@]}" shell dumpsys activity activities > "$diagnostics/startup-activities.txt"
@@ -52,9 +52,9 @@ if grep -E 'FATAL EXCEPTION|panicked at|Fatal signal [0-9]+' "$diagnostics/start
     echo 'Fatal startup error detected'; exit 1
 fi
 "${adb_cmd[@]}" shell am instrument -w \
-    org.nekosportsworld.tool.tests/org.nekosportsworld.tool.tests.SmokeInstrumentation | tee "$diagnostics/instrumentation.txt"
+    org.demaciasportsworld.tool.tests/org.demaciasportsworld.tool.tests.SmokeInstrumentation | tee "$diagnostics/instrumentation.txt"
 grep -E 'PASS: [0-9]+ Android integration checks' "$diagnostics/instrumentation.txt"
 "${adb_cmd[@]}" shell am instrument -w -e verifyStoredBrand true \
-    org.nekosportsworld.tool.tests/org.nekosportsworld.tool.tests.SmokeInstrumentation | tee "$diagnostics/persistence.txt"
+    org.demaciasportsworld.tool.tests/org.demaciasportsworld.tool.tests.SmokeInstrumentation | tee "$diagnostics/persistence.txt"
 grep -E 'PASS: [0-9]+ Android persistence restart checks' "$diagnostics/persistence.txt"
 echo 'PASS: release startup stayed alive for 70 seconds; Activity and process-restart checks passed'

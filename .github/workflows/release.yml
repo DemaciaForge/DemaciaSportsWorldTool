@@ -1,4 +1,4 @@
-# NekoSportsWorldTool 自动发布
+# DemaciaSportsWorldTool 自动发布
 #
 # 触发方式：
 #   ① 推送 tag：  git tag v0.2.0 && git push origin v0.2.0
@@ -35,20 +35,20 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             mode: full
-            artifact: NekoSportsWorldTool-win-x64
+            artifact: DemaciaSportsWorldTool-win-x64
           - os: macos-latest
             target: aarch64-apple-darwin
             mode: full
-            artifact: NekoSportsWorldTool-macos-arm64
+            artifact: DemaciaSportsWorldTool-macos-arm64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             mode: cli
-            artifact: NekoSportsWorldTool-linux-x64
+            artifact: DemaciaSportsWorldTool-linux-x64
             cross: true
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             mode: cli
-            artifact: NekoSportsWorldTool-linux-aarch64
+            artifact: DemaciaSportsWorldTool-linux-aarch64
             cross: true
     runs-on: ${{ matrix.os }}
     env:
@@ -87,7 +87,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          BIN=target/$TARGET/release/nekosportsworldtool
+          BIN=target/$TARGET/release/demaciasportsworldtool
           if [ "${{ matrix.os }}" = "windows-latest" ]; then BIN="$BIN.exe"; fi
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             7z a "dist/$ARTIFACT.zip" "$BIN"
@@ -96,13 +96,13 @@ jobs:
           fi
 
       - uses: actions/upload-artifact@v4
-        if: ${{ github.repository != 'YanamiNeko/NekoSportsWorldTool' || github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/') }}
+        if: ${{ github.repository != 'DemaciaForge/DemaciaSportsWorldTool' || github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/') }}
         with:
           name: ${{ matrix.artifact }}
           path: dist/*
 
       - name: Release (upstream tag push only)
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.repository == 'YanamiNeko/NekoSportsWorldTool' }}
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.repository == 'DemaciaForge/DemaciaSportsWorldTool' }}
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*

@@ -1,8 +1,8 @@
-# NekoSportsWorldTool Android APK 自动构建
+# DemaciaSportsWorldTool Android APK 自动构建
 #
 # 触发方式：
 #   ① 上游仓库推送 tag：git tag v0.2.6 && git push origin v0.2.6
-#      —— APK 以固定资产名 NekoSportsWorldTool-android-arm64.apk 挂到该 tag 的
+#      —— APK 以固定资产名 DemaciaSportsWorldTool-android-arm64.apk 挂到该 tag 的
 #        Release（与 release.yml 写同一个 Release，桌面端产物由那边附加），
 #        Android 端「关于页」自更新按此资产名精确匹配（src/update.rs asset_name）。
 #   ② fork、手动构建和非 tag 构建只上传 Actions artifact，不创建 Release。
@@ -50,7 +50,7 @@ env:
   NDK_VERSION: 29.0.14206865
   BUILD_TOOLS: 36.0.0
   PLATFORM: android-36
-  APK_ASSET: NekoSportsWorldTool-android-arm64.apk
+  APK_ASSET: DemaciaSportsWorldTool-android-arm64.apk
 
 jobs:
   apk:
@@ -117,7 +117,7 @@ jobs:
 
       - name: ELF 16KB 对齐检查
         run: |
-          so="target/$TARGET/release/libnekosportsworldtool.so"
+          so="target/$TARGET/release/libdemaciasportsworldtool.so"
           if [ ! -f "$so" ]; then echo "缺少原生库：$so"; exit 1; fi
           aligns="$("$NDK_BIN/llvm-readelf" -lW "$so" | awk '/^ *LOAD /{print $NF}')"
           if [ -z "$aligns" ]; then echo "未找到 LOAD 段"; exit 1; fi
@@ -154,11 +154,11 @@ jobs:
             --manifest "$out/AndroidManifest.xml" "$out/resources.zip"
 
           # 只装入声明的原生库与 dex（与本地脚本一致，不带多余文件）
-          cp "target/$TARGET/release/libnekosportsworldtool.so" "$out/staging/lib/$ABI/libnekosportsworldtool.so"
+          cp "target/$TARGET/release/libdemaciasportsworldtool.so" "$out/staging/lib/$ABI/libdemaciasportsworldtool.so"
           cp "$out/dex/classes.dex" "$out/staging/classes.dex"
           ( cd "$out/staging" \
             && zip -q -d ../unsigned.apk 'classes.dex' 'lib/*' || true \
-            && zip -q -X ../unsigned.apk classes.dex "lib/$ABI/libnekosportsworldtool.so" )
+            && zip -q -X ../unsigned.apk classes.dex "lib/$ABI/libdemaciasportsworldtool.so" )
           "$BT/zipalign" -f -P 16 4 "$out/unsigned.apk" "$out/aligned.apk"
 
       - name: 准备签名密钥（tag 构建必须有 Secret；否则一次性调试密钥）
@@ -177,7 +177,7 @@ jobs:
             echo "KS_ALIAS=${KS_ALIAS_SECR:-androiddebugkey}" >> "$GITHUB_ENV"
             echo "KEY_PASS=${KEY_PASS_SECR:-android}" >> "$GITHUB_ENV"
             echo "使用仓库 Secret 签名密钥"
-          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/* && "$GITHUB_REPOSITORY" == "YanamiNeko/NekoSportsWorldTool" ]]; then
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/* && "$GITHUB_REPOSITORY" == "DemaciaForge/DemaciaSportsWorldTool" ]]; then
             echo "::error::上游 tag 发布必须配置 Secret ANDROID_KEYSTORE_BASE64（keystore 的 base64）。签名不一致会导致所有已装用户无法覆盖安装；本地历史密钥为 android/.signing/local-test.keystore，请将其 base64 后配置。"
             exit 1
           else
@@ -205,13 +205,13 @@ jobs:
           sha256sum "$apk"
 
       - uses: actions/upload-artifact@v4
-        if: ${{ github.repository != 'YanamiNeko/NekoSportsWorldTool' || github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/') }}
+        if: ${{ github.repository != 'DemaciaForge/DemaciaSportsWorldTool' || github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/') }}
         with:
-          name: NekoSportsWorldTool-android-arm64
+          name: DemaciaSportsWorldTool-android-arm64
           path: dist/*
 
       - name: 发布到 Release（仅上游 tag push）
-        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.repository == 'YanamiNeko/NekoSportsWorldTool' }}
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.repository == 'DemaciaForge/DemaciaSportsWorldTool' }}
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
