@@ -3,8 +3,8 @@
 use super::about::FinishAction;
 use super::{
     App, PopupInfo, AI_DETAIL, AI_DONE, AI_LIST, AI_RECORDS, CHEAT, CUSTOM_ROUTE_DONE, FENCE_DONE,
-    IP, LOGIN_DONE, POINTS_DONE, RANK, RECORDS, RUN_DETAIL, RUN_DONE, SCHOOL_PACE, SEMESTER,
-    UPDATE_CHK, UPDATE_DONE, UPDATE_PROG, USER,
+    IP, LOGIN_DONE, POINTS_DONE, RANK, RECORDS, RUN_DETAIL, RUN_DONE, SEMESTER, UPDATE_CHK,
+    UPDATE_DONE, UPDATE_PROG, USER,
 };
 use crate::api::model;
 use chrono::TimeZone;
@@ -30,7 +30,6 @@ impl App {
         let mut update_prog = None;
         let mut update_done = None;
         let mut custom_route_json = None;
-        let mut school_pace_json = None;
         while let Ok(msg) = self.rx.try_recv() {
             if let Some(v) = msg.strip_prefix(IP) {
                 done_ip = Some(v.to_string());
@@ -38,8 +37,6 @@ impl App {
                 done_fence = true;
             } else if msg == POINTS_DONE {
                 done_points = true;
-            } else if let Some(v) = msg.strip_prefix(SCHOOL_PACE) {
-                school_pace_json = Some(v.to_string());
             } else if let Some(v) = msg.strip_prefix(LOGIN_DONE) {
                 done_login = Some(v.to_string());
             } else if let Some(v) = msg.strip_prefix(RUN_DONE) {
@@ -116,20 +113,6 @@ impl App {
         }
         if done_points {
             self.run_page.preview_stale = true;
-        }
-        if let Some(v) = school_pace_json {
-            let val: serde_json::Value = serde_json::from_str(&v).unwrap_or_default();
-            if val.get("ok").and_then(|b| b.as_bool()).unwrap_or(false) {
-                let fast = val.get("fast_s_km").and_then(|x| x.as_f64());
-                let slow = val.get("slow_s_km").and_then(|x| x.as_f64());
-                if let (Some(fast), Some(slow)) = (fast, slow) {
-                    // 填入学校范围；用户可在这个区间内再改，越界会被拦下。
-                    self.run_page.pace_min = fast as f32;
-                    self.run_page.pace_max = slow as f32;
-                    self.run_page.school_pace = Some((fast as f32, slow as f32));
-                    self.run_page.plan = None;
-                }
-            }
         }
         if let Some(v) = done_login {
             self.login_busy = false;

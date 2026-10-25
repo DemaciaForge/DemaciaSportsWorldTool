@@ -1,4 +1,4 @@
-//! 自然轨迹生成器。
+﻿//! 自然轨迹生成器。
 //!
 //! 四种几何入口（打卡点拟合环 / 标准跑道 / 真实道路 / 自定义路线）共用同一个组装器
 //! [`assemble`]：先由各入口给出「沿场地路线的前进量」，再由 [`assemble`] 把前进量换算
@@ -53,6 +53,11 @@ pub const ALT_UNDULATION_M_PER_KM: f64 = 2.4;
 /// 单趟跑步里跑者离开路线再回来（喝水 / 系鞋带）的概率。
 pub const SIDE_TRIP_P: f64 = 0.10;
 
+/// 等比缩放逐点速度至目标总距：越界点钳在窗口边界，剩余差量由未饱和点分摊。
+fn fit_speeds(w: &mut [f64], dts: &[f64], target: f64) {
+    fit_speeds_capped(w, dts, target, SPEED_FLOOR, SPEED_CEIL);
+}
+
 /// 采样时刻：`grid[0] = 0`，其余为 5 s 为主的非均匀步长，末点为 `dur`。
 pub(crate) fn interior_grid(dur_f: f64, rng: &mut Rng) -> (Vec<f64>, Vec<f64>) {
     sample_grid(dur_f, rng)
@@ -60,12 +65,7 @@ pub(crate) fn interior_grid(dur_f: f64, rng: &mut Rng) -> (Vec<f64>, Vec<f64>) {
 
 /// 经典速度剖面：5s 主采样时间网格 + ramp×疲劳×三正弦×余弦凹陷×微噪速度曲线，
 /// 逐点速度约束在有效配速窗口内并精确命中目标距离。返回 (times, dts, speeds)。
-pub(crate) fn speed_profile(
-    dist: f64,
-    dur: f64,
-    rng: &mut Rng,
-    pace: crate::track::pace::PaceWindow,
-) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+pub(crate) fn speed_profile(dist: f64, dur: f64, rng: &mut Rng) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let dur_f = dur;
     let phase_v = rng.uniform(0.0, std::f64::consts::TAU);
     let (times, dts) = interior_grid(dur_f, rng);
@@ -125,13 +125,7 @@ pub(crate) fn speed_profile(
     let last = n - 1;
     let mut interior: Vec<f64> = w[2..last].to_vec();
     let interior_dt: Vec<f64> = dts[2..last].to_vec();
-    fit_speeds_capped(
-        &mut interior,
-        &interior_dt,
-        dist,
-        pace.gen_floor_mps(),
-        pace.gen_ceil_mps(),
-    );
+    fit_speeds(&mut interior, &interior_dt, dist);
     for (i, v) in interior.into_iter().enumerate() {
         w[i + 2] = v;
     }
@@ -168,17 +162,7 @@ pub fn build_stadium(
     points_bd: &[(f64, f64)],
     spec: TrackSpec,
 ) -> Result<Track, String> {
-    build_stadium_with_fences(
-        dist,
-        dur,
-        seed,
-        _center,
-        start_ms,
-        points_bd,
-        spec,
-        &[],
-        crate::track::pace::PaceWindow::FALLBACK,
-    )
+    build_stadium_with_fences(dist, dur, seed, _center, start_ms, points_bd, spec, &[])
 }
 
 /// 同 [`build_stadium`]，额外用电子围栏把跑道直道摆正到场地长边方向。
@@ -191,7 +175,6 @@ pub fn build_stadium_with_fences(
     points_bd: &[(f64, f64)],
     spec: TrackSpec,
     fences: &[Vec<(f64, f64)>],
-    pace: crate::track::pace::PaceWindow,
 ) -> Result<Track, String> {
     let mut rng = Rng::new(seed);
     let mut ring = site_ring_with_fences(points_bd, spec, fences)?;
@@ -228,7 +211,7 @@ pub fn build_stadium_with_fences(
     let ring_m = ring.ring_m;
     let laps = (dist / ring_m).max(1.0).round();
     let dist = laps * ring_m;
-    let (times, dts, w) = speed_profile(dist, dur as f64, &mut rng, pace);
+    let (times, dts, w) = speed_profile(dist, dur as f64, &mut rng);
     Ok(assemble(Assembly {
         dist,
         dur_s: dur as f64,
@@ -244,7 +227,6 @@ pub fn build_stadium_with_fences(
         start_at_ring_origin: false,
         loop_m: None,
         rng,
-        pace,
     }))
 }
 
@@ -267,7 +249,6 @@ pub fn build_with_color_mode(
         points_bd,
         color_mode,
         &[],
-        crate::track::pace::PaceWindow::FALLBACK,
     )
 }
 
@@ -281,7 +262,6 @@ pub fn build_with_color_mode_with_fences(
     points_bd: &[(f64, f64)],
     color_mode: TrackColorMode,
     fences: &[Vec<(f64, f64)>],
-    pace: crate::track::pace::PaceWindow,
 ) -> Track {
     let mut rng = Rng::new(seed);
     let mut ring = site_ring_with_fences(points_bd, TrackSpec::Auto, fences)
@@ -309,7 +289,7 @@ pub fn build_with_color_mode_with_fences(
             }
         }
     }
-    let (times, dts, w) = speed_profile(dist, dur as f64, &mut rng, pace);
+    let (times, dts, w) = speed_profile(dist, dur as f64, &mut rng);
     assemble(Assembly {
         dist,
         dur_s: dur as f64,
@@ -325,7 +305,6 @@ pub fn build_with_color_mode_with_fences(
         start_at_ring_origin: false,
         loop_m: None,
         rng,
-        pace,
     })
 }
 
@@ -352,8 +331,6 @@ pub(crate) struct Assembly<'a> {
     pub rng: Rng,
     /// 本次实际沿路线跑到多远（米）。`None` = 由形态参数按目标距离换算。
     pub loop_m: Option<f64>,
-    /// 学校规定的配速窗口；所有速度拟合都收敛在这个区间内。
-    pub pace: crate::track::pace::PaceWindow,
 }
 
 /// 兜底环：打卡点不足 3 个时用质心处的标准跑道。
@@ -403,7 +380,6 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         start_at_ring_origin,
         loop_m,
         mut rng,
-        pace,
     } = a;
 
     let n = times.len();
@@ -421,10 +397,10 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
     let mut interior_dt: Vec<f64> = step_dt[2..n - 1].to_vec();
     fit_speeds_capped(
         &mut interior,
-        &interior_dt,
+        &mut interior_dt,
         dist,
-        pace.gen_floor_mps(),
-        pace.gen_ceil_mps(),
+        SPEED_FLOOR,
+        SPEED_CEIL,
     );
     for (i, v) in interior.into_iter().enumerate() {
         speeds[i + 2] = v;

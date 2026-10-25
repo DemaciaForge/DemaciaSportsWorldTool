@@ -2,7 +2,7 @@
 
 use super::{
     App, AI_DETAIL, AI_LIST, AI_RECORDS, CHEAT, FENCE_DONE, IP, LOGIN_DONE, POINTS_DONE, RANK,
-    RECORDS, RUN_DETAIL, SCHOOL_PACE, SEMESTER, UPDATE_CHK, UPDATE_DONE, UPDATE_PROG, USER,
+    RECORDS, RUN_DETAIL, SEMESTER, UPDATE_CHK, UPDATE_DONE, UPDATE_PROG, USER,
 };
 use crate::api::model;
 use crate::track::generate_road::RouteMode;
@@ -100,44 +100,6 @@ impl App {
                     tx.send(FENCE_DONE.to_string()).ok();
                 }
                 Err(e) => log(&format!("⚠ [fence] 电子围栏获取失败: {e}")),
-            }
-        });
-    }
-
-    /// 后台读取学校规定的配速窗口，回传给跑步页填充（用户可再改）。
-    ///
-    /// 配速范围属于学校规则，不同学校不同，程序不该写死；这里拉一次策略，
-    /// 把 `speedTop`/`speedBottom` 换算成秒/公里填进输入框。
-    pub(crate) fn refresh_school_pace(&self) {
-        let Some(session) = self.session.clone() else {
-            return;
-        };
-        let identity = self.identity.clone();
-        self.spawn_job(move |tx| {
-            let mut log = App::logger(tx.clone());
-            let mut client = crate::api::client::ApiClient::new(identity, Some(session));
-            match crate::api::policy::fetch_policy(&mut client) {
-                Ok(pol) => match pol.pace {
-                    Some(w) => {
-                        let (fast, slow) = w.sec_km();
-                        log(&format!(
-                            "√ [pace] 学校规定配速 {}（{fast:.0}–{slow:.0} 秒/公里）",
-                            w.describe()
-                        ));
-                        let payload = serde_json::json!({
-                            "ok": true,
-                            "fast_s_km": fast,
-                            "slow_s_km": slow,
-                        });
-                        tx.send(format!("{SCHOOL_PACE}{payload}")).ok();
-                    }
-                    None => {
-                        log("⚠ [pace] 策略里没有 speedTop/speedBottom，无法读取学校配速范围");
-                        tx.send(format!("{SCHOOL_PACE}{}", serde_json::json!({"ok": false})))
-                            .ok();
-                    }
-                },
-                Err(e) => log(&format!("⚠ [pace] 读取学校配速失败: {e}")),
             }
         });
     }

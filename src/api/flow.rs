@@ -24,11 +24,6 @@ pub struct RunParams {
     /// 距离（米）与时长（秒）已由 UI 参数解析。
     pub dist: f64,
     pub dur: i64,
-    /// 用户是否**显式指定**了配速（CLI `--pace` / UI 手改配速区间）。
-    ///
-    /// 为 `true` 时越界直接报错让学生改；为 `false`（自动模式）才把时长收敛进
-    /// 学校窗口——自动模式本来就没指定值，静默换一个不会违背任何人的意图。
-    pub explicit_pace: bool,
     /// 开始时间（毫秒）。
     pub start_ms: i64,
     pub face_check: i64,
@@ -218,25 +213,6 @@ pub fn run_full_flow(
         "√ [policy] ts={} policy={} minDistance={} validTime={}",
         pol.timestamp, pol.policy, pol.min_distance, pol.valid_time
     ));
-    // 配速窗口由学校规则决定，不写死在程序里。
-    let pace_window = match pol.pace {
-        Some(w) => {
-            let (fast, slow) = w.min_km();
-            log(&format!(
-                "√ [pace] 学校规定配速 {}（speedTop={fast:.2} / speedBottom={slow:.2} 分/公里）",
-                w.describe()
-            ));
-            w
-        }
-        None => {
-            log(&format!(
-                "⚠ [pace] 策略里没有 speedTop/speedBottom，暂用兜底窗口 {} —— \
-                 这不是学校规则，提交前请自行确认是否在有效配速内",
-                crate::track::pace::PaceWindow::FALLBACK.describe()
-            ));
-            crate::track::pace::PaceWindow::FALLBACK
-        }
-    };
     sleep_secs(2);
 
     // ② 实时点位（拒绝本地样本兜底）
@@ -303,7 +279,6 @@ pub fn run_full_flow(
             points_bd,
             mode,
             &layout_fences,
-            pace_window,
         )
     };
     let pts = points_ctx.points.clone();
@@ -409,29 +384,20 @@ pub fn run_full_flow(
             let _ = super::model::save_points_cache_context(new_anchor, &pts, &area);
         }
     }
-    // 配速必须落在**学校规定**的窗口内。用户自己填了配速却越界时直接报错让他改，
-    // 不静默修正——静默改时长会让学生以为交上去的就是他要的那一趟。
+    // 平均配速须落在有效窗口内（否则逐点速度无法全窗内），越界时修正时长
     let mut params = params.clone();
     let avg = params.dist / params.dur as f64;
-    if params.explicit_pace && !pace_window.contains_mps(avg) {
-        let (fast, slow) = pace_window.sec_km();
-        return Err(format!(
-            "配速 {} 超出学校规定范围 {}–{}，请返回到设置页改成范围内的值",
-            crate::track::pace::fmt_sec_km(params.dur as f64 / (params.dist / 1000.0)),
-            crate::track::pace::fmt_sec_km(fast),
-            crate::track::pace::fmt_sec_km(slow),
-        ));
-    }
-    // 自动模式（用户没填配速）才收敛进窗口。
-    let fixed_avg = pace_window.clamp_mps(avg);
+    let fixed_avg = avg.clamp(
+        crate::track::generator::SPEED_FLOOR + 0.1,
+        crate::track::generator::SPEED_CEIL - 0.1,
+    );
     if (fixed_avg - avg).abs() > 1e-6 {
         let fixed_dur = (params.dist / fixed_avg).round() as i64;
         log(&format!(
-            "[track] 平均配速 {} m/s 不在学校窗口内，时长 {} -> {}s（窗口 {}）",
+            "[track] 平均配速 {} m/s 超出有效窗口，时长 {} -> {}s",
             (avg * 100.0).round() / 100.0,
             params.dur,
-            fixed_dur,
-            pace_window.describe()
+            fixed_dur
         ));
         params.dur = fixed_dur;
     }
@@ -457,7 +423,6 @@ pub fn run_full_flow(
             &pts_bd,
             params.track_spec,
             &layout_fences,
-            pace_window,
         )?
     } else {
         match params.route_mode {
@@ -559,14 +524,7 @@ pub fn run_full_flow(
                 params.track_color_mode,
             ),
             RouteMode::Custom => {
-                match build_custom_track(
-                    &params,
-                    &pol.must_points,
-                    &pts_bd,
-                    start_ms,
-                    pace_window,
-                    log,
-                ) {
+                match build_custom_track(&params, &pol.must_points, &pts_bd, start_ms, log) {
                     Ok(t) => t,
                     Err(e) => {
                         log(&format!("⚠ [track] 自定义路线失败，回退经典算法: {e}"));
@@ -617,7 +575,7 @@ pub fn run_full_flow(
     // 这一步以前只有 dry-run 做，正式流程直接提交——也就是说几何或时序一旦出问题，
     // 是"发出去了才知道"。放在这里，宁可本地报错也不发一条会被判无效的记录。
     {
-        let report = crate::track::realism::audit_with_pace(&track, pace_window);
+        let report = crate::track::realism::audit(&track);
         log(&format!("[realism] {}", report.summary()));
         for f in &report.failures {
             log(&format!("  ✗ [realism] {f}"));
@@ -747,7 +705,6 @@ fn build_custom_track(
     must_bd: &[(f64, f64)],
     pts_bd: &[(f64, f64)],
     start_ms: i64,
-    pace: crate::track::pace::PaceWindow,
     log: &mut dyn FnMut(&str),
 ) -> Result<crate::track::model::Track, String> {
     let spec = params
@@ -770,15 +727,8 @@ fn build_custom_track(
         "[track] {note} → 距离 {:.0} m / {dur_eff}s",
         d_eff
     ));
-    let track = crate::track::custom::build_custom(
-        d_eff,
-        dur_eff,
-        params.seed,
-        start_ms,
-        &ring,
-        pts_bd,
-        pace,
-    );
+    let track =
+        crate::track::custom::build_custom(d_eff, dur_eff, params.seed, start_ms, &ring, pts_bd);
     // 必经点告警：自定义路线不强制改道，必经点不在路线附近时提示可能不计成绩
     for (i, &(mlat, mlon)) in must_bd.iter().enumerate() {
         let mut best = f64::INFINITY;
@@ -836,7 +786,6 @@ mod tests {
         RunParams {
             dist: 2_000.0,
             dur: 800,
-            explicit_pace: false,
             start_ms: 1_700_000_000_000,
             face_check: 1,
             manual_altitude: None,

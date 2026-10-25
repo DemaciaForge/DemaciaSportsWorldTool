@@ -16,11 +16,6 @@ pub struct PolicyInfo {
     pub must_points: Vec<(f64, f64)>,
     /// 服务端可选的校园区域/绿色围栏元数据；没有配置时为自由跑默认值。
     pub area: crate::track::wire::RunAreaMeta,
-    /// 学校规定的有效配速窗口（`runRuleModel.speedTop` / `speedBottom`）。
-    ///
-    /// `None` 表示策略响应里没有这两项——此时只能退回
-    /// [`crate::track::pace::PaceWindow::FALLBACK`]，并应当提示用户这不是学校规则。
-    pub pace: Option<crate::track::pace::PaceWindow>,
 }
 
 /// 将已解密的业务响应解析为稳定的策略模型，供网络路径和 fixture 测试共用。
@@ -44,25 +39,7 @@ pub(crate) fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
         valid_time: rule.get("validTime").and_then(|t| t.as_i64()).unwrap_or(0),
         must_points: extract_must_points(biz),
         area: super::points::area_from_payload(biz, &[]),
-        pace: parse_pace_window(&rule),
     })
-}
-
-/// 从 `runRuleModel` 里读学校规定的配速窗口。
-///
-/// `speedTop` = 最快（分/公里最小），`speedBottom` = 最慢。两者缺一或数值不自洽
-/// 都返回 `None`——宁可让调用方退回兜底窗口并提示，也不猜一个出来。
-fn parse_pace_window(rule: &Value) -> Option<crate::track::pace::PaceWindow> {
-    let num = |key: &str| -> Option<f64> {
-        rule.get(key).and_then(|v| {
-            v.as_f64()
-                .or_else(|| v.as_i64().map(|n| n as f64))
-                .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
-        })
-    };
-    let top = num("speedTop")?;
-    let bottom = num("speedBottom")?;
-    crate::track::pace::PaceWindow::from_school(top, bottom).ok()
 }
 
 /// 从 policy 响应 `data` 中防御式提取必经点列表（字段名不确定，逐个尝试）。

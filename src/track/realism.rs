@@ -203,16 +203,8 @@ fn circularity(points: &[(f64, f64)]) -> Option<f64> {
     Some((1.0 / (1.0 + rms / r)).powi(2))
 }
 
-/// 把整条轨迹当成服务端一样重算一遍（兜底配速窗口）。
+/// 把整条轨迹当成服务端一样重算一遍。
 pub fn audit(track: &Track) -> AuthenticityReport {
-    audit_with_pace(track, super::pace::PaceWindow::FALLBACK)
-}
-
-/// 同 [`audit`]，但用**学校规定的配速窗口**判定速度上限。
-///
-/// 峰值配速不能只跟"人类极限"比：学校窗口比人类极限窄得多，贴着学校最慢限速
-/// 生成的记录仍然会通过人类极限检查，却已经违反学校规则。
-pub fn audit_with_pace(track: &Track, pace: super::pace::PaceWindow) -> AuthenticityReport {
     let locs = &track.locations;
     let mut checks: Vec<Check> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
@@ -260,7 +252,7 @@ pub fn audit_with_pace(track: &Track, pace: super::pace::PaceWindow) -> Authenti
             peak_at = i;
         }
     }
-    let v_cap = pace.gen_ceil_mps() * INSTANT_SPEED_TOLERANCE;
+    let v_cap = super::generator::SPEED_CEIL * INSTANT_SPEED_TOLERANCE;
     let c = Check::new(
         "instant_speed_peak_mps",
         peak_v,
@@ -607,9 +599,9 @@ pub fn audit_with_pace(track: &Track, pace: super::pace::PaceWindow) -> Authenti
             peak,
             format!(
                 "<= {}",
-                round_to(pace.gen_ceil_mps() * INSTANT_SPEED_TOLERANCE, 2)
+                round_to(super::generator::SPEED_CEIL * INSTANT_SPEED_TOLERANCE, 2)
             ),
-            peak <= pace.gen_ceil_mps() * INSTANT_SPEED_TOLERANCE,
+            peak <= super::generator::SPEED_CEIL * INSTANT_SPEED_TOLERANCE,
         );
         if !c.pass {
             failures.push(format!("10s 窗峰值配速 {peak:.1} m/s，超出人类跑步极限"));
