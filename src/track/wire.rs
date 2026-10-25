@@ -174,12 +174,29 @@ pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
     })
 }
 
+/// 提交时保留为「普通点」的点位数量上限。
+///
+/// 规则里有一条「至少通过2个普通点位」（`reasonList` type 3）。原来
+/// [`five_point_payload`] 把所有已通过点都标成 `isFixed=1`，等于告诉服务端
+/// 「普通点 0 个」，那条永远不达标。这里保留至多 2 个**服务端自己标为普通点**
+/// 的非起点点位不改成 1，让普通点计数成立；其余仍按已验证的成功载荷标 1。
+const ORDINARY_POINT_QUOTA: usize = 2;
+
 /// 五点实体（实时点位 → 跑完态 isPass=true）。
 pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
+    // 起点恒为必经点；其余点位按上面的配额保留一部分 `isFixed=0`。
+    let mut ordinary_left = ORDINARY_POINT_QUOTA;
     points
         .iter()
         .enumerate()
         .map(|(i, p)| {
+            let server_says_ordinary = p.get("isFixed").and_then(|v| v.as_i64()).unwrap_or(0) == 0;
+            // 只翻「服务端本来就标为普通点」的位置：把必经点说成普通点会与
+            // 服务端自己的判定冲突，比不达标更糟。
+            let keep_ordinary = i > 0 && server_says_ordinary && ordinary_left > 0;
+            if keep_ordinary {
+                ordinary_left -= 1;
+            }
             json!({
                 "flag": start_ms,
                 "glat": p["glat"].as_f64().unwrap_or(0.0),
@@ -187,8 +204,9 @@ pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
                 "id": i as i64 + 1,
                 // 跑完态的 fivePointJson 要把本次命中的打卡点标为固定点。
                 // 点位接口有时只把起点标成 1（其余返回 0），但已验证的
-                // 成功载荷要求所有已通过点均为 isFixed=1。
-                "isFixed": 1,
+                // 成功载荷要求所有已通过点均为 isFixed=1——普通点配额是
+                // 唯一的例外，见 ORDINARY_POINT_QUOTA。
+                "isFixed": if keep_ordinary { 0 } else { 1 },
                 "isPass": true,
                 "lat": p["lat"].as_f64().unwrap_or(0.0),
                 "lon": p["lon"].as_f64().unwrap_or(0.0),
@@ -198,6 +216,16 @@ pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// 统计 [`five_point_payload`] 会把多少个点位保留为普通点（供日志用）。
+pub fn ordinary_point_count(points: &[Value]) -> usize {
+    points
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| *i > 0 && p.get("isFixed").and_then(|v| v.as_i64()).unwrap_or(0) == 0)
+        .count()
+        .min(ORDINARY_POINT_QUOTA)
 }
 
 /// 提交 body 的 fivePointJson 包装串。
@@ -412,6 +440,63 @@ mod validation_tests {
         let fixed: Value = serde_json::from_str(raw).unwrap();
         assert_eq!(fixed[0]["isFixed"], 1);
         assert_eq!(fixed[0]["isPass"], true);
+    }
+
+    /// 普通点配额：起点恒为 1，其后至多 2 个「服务端本来就标 0」的点保留 0，
+    /// 其余仍标 1。这是「至少通过2个普通点位」能达标的关键。
+    fn points_with_flags(flags: &[i64]) -> Vec<Value> {
+        flags
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                json!({
+                    "lat": 39.9 + i as f64 * 0.001,
+                    "lon": 116.4 + i as f64 * 0.001,
+                    "glat": 39.9 + i as f64 * 0.001,
+                    "glon": 116.4 + i as f64 * 0.001,
+                    "isFixed": f,
+                    "pointName": format!("P{i}"),
+                })
+            })
+            .collect()
+    }
+
+    fn payload_flags(points: &[Value]) -> Vec<i64> {
+        five_point_payload(points, 1_700_000_000_000)
+            .iter()
+            .map(|p| p["isFixed"].as_i64().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn ordinary_quota_keeps_exactly_two_ordinary_points() {
+        // 服务端把除起点外全部标为 0（真实接口常见情形）
+        let pts = points_with_flags(&[1, 0, 0, 0, 0]);
+        assert_eq!(payload_flags(&pts), vec![1, 0, 0, 1, 1]);
+        assert_eq!(ordinary_point_count(&pts), 2);
+    }
+
+    #[test]
+    fn ordinary_quota_never_turns_must_pass_points_into_ordinary() {
+        // 服务端标的全是必经点：一个都不能翻，宁可不达标也不能自相矛盾
+        let pts = points_with_flags(&[1, 1, 1, 1]);
+        assert_eq!(payload_flags(&pts), vec![1, 1, 1, 1]);
+        assert_eq!(ordinary_point_count(&pts), 0);
+    }
+
+    #[test]
+    fn ordinary_quota_takes_what_is_available() {
+        // 只有一个可翻的点
+        let pts = points_with_flags(&[1, 1, 0, 1]);
+        assert_eq!(payload_flags(&pts), vec![1, 1, 0, 1]);
+        assert_eq!(ordinary_point_count(&pts), 1);
+    }
+
+    #[test]
+    fn ordinary_quota_never_flips_the_start_point() {
+        // 起点即便服务端标 0 也必须是 1
+        let pts = points_with_flags(&[0, 0, 0]);
+        assert_eq!(payload_flags(&pts), vec![1, 0, 0]);
     }
 
     #[test]
