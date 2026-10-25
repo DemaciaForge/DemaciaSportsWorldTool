@@ -135,16 +135,14 @@ demaciasportsworldtool help                      # 全部命令
 更新源是 `api.github.com/repos/DemaciaForge/DemaciaSportsWorldTool/releases/latest`，
 **匿名请求**，不携带账号令牌。因此本仓库必须保持 **public**，否则匿名读不到发布信息。
 
-各平台对应的发布资产名是固定的，改名会导致更新失败：
+发布资产名是固定的，改名会导致更新失败。**目前只发布 Windows x64 包**，
+macOS / Linux / Android 目标已从 CI 移除：
 
 | 平台 | 资产名 |
 |---|---|
 | Windows x86_64 | `DemaciaSportsWorldTool-win-x64.zip` |
-| macOS arm64 | `DemaciaSportsWorldTool-macos-arm64.tar.gz` |
-| Linux x86_64 | `DemaciaSportsWorldTool-linux-x64.tar.gz` |
-| Linux aarch64 | `DemaciaSportsWorldTool-linux-aarch64.tar.gz` |
 
-桌面端会从 zip 里找 `*.exe`（打包带 `target/` 路径也能识别），下载后自替换并重启。
+程序会从 zip 里找 `*.exe`（打包带 `target/` 路径也能识别），下载后自替换并重启。
 网络不通时可到 [Releases](https://github.com/DemaciaForge/DemaciaSportsWorldTool/releases)
 手动下载：退出程序，用新的 `demaciasportsworldtool.exe` 覆盖旧的，**保留**
 `config.json`、`identity.json`、`points_cache.json` 等数据文件。

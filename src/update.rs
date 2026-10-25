@@ -28,12 +28,11 @@ fn repos() -> Vec<String> {
 
 /// 当前平台对应的 Release 资产名；无匹配产物的平台返回 None。
 pub fn asset_name() -> Option<&'static str> {
+    // 目前只发布 Windows x64 包；macOS / Linux / Android 目标已从 CI 移除。
+    // 这些平台返回 None 时，检查更新会提示「当前平台没有可用安装包」，
+    // 而不是去下载一个并不存在的资产。
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("windows", "x86_64") => Some("DemaciaSportsWorldTool-win-x64.zip"),
-        ("macos", "aarch64") => Some("DemaciaSportsWorldTool-macos-arm64.tar.gz"),
-        ("linux", "x86_64") => Some("DemaciaSportsWorldTool-linux-x64.tar.gz"),
-        ("linux", "aarch64") => Some("DemaciaSportsWorldTool-linux-aarch64.tar.gz"),
-        ("android", "aarch64") => Some("DemaciaSportsWorldTool-android-arm64.apk"),
         _ => None,
     }
 }

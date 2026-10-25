@@ -31,25 +31,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # 只构建 Windows x64。macOS / Linux 目标已移除，不再产出 tar.gz。
         include:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             mode: full
             artifact: DemaciaSportsWorldTool-win-x64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            mode: full
-            artifact: DemaciaSportsWorldTool-macos-arm64
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            mode: cli
-            artifact: DemaciaSportsWorldTool-linux-x64
-            cross: true
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            mode: cli
-            artifact: DemaciaSportsWorldTool-linux-aarch64
-            cross: true
     runs-on: ${{ matrix.os }}
     env:
       MODE: ${{ github.event.inputs.mode || matrix.mode }}
