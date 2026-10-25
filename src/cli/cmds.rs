@@ -112,6 +112,31 @@ fn cmd_run(rest: &[&str]) -> i32 {
     let sess = model::load_session();
     let mut client = ApiClient::new(identity, sess.is_logged_in().then_some(sess));
 
+    let parse_opt = |key: &str| -> Result<Option<f64>, String> {
+        match get(&flags, key) {
+            None => Ok(None),
+            Some(v) => v
+                .trim()
+                .parse::<f64>()
+                .map(Some)
+                .map_err(|_| format!("--{key} 必须是数字（收到 {v}）")),
+        }
+    };
+    let altitude_base = match parse_opt("altitude-base") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+    let altitude_osc = match parse_opt("altitude-osc") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+
     let dist = if dist_km > 0.0 {
         dist_km as f64 * 1000.0
     } else {
@@ -137,6 +162,17 @@ fn cmd_run(rest: &[&str]) -> i32 {
         fmt_hms(start_ms)
     );
 
+    let defaults = crate::track::altitude::AltitudeProfile::default();
+    let altitude_profile = crate::track::altitude::AltitudeProfile {
+        base_m: altitude_base
+            .or(cfg.altitude_base_m)
+            .unwrap_or(defaults.base_m),
+        oscillation_m: altitude_osc
+            .or(cfg.altitude_oscillation_m)
+            .unwrap_or(defaults.oscillation_m),
+    }
+    .validate();
+
     let mut log = logger();
     let params = crate::api::flow::RunParams {
         dist,
@@ -147,6 +183,13 @@ fn cmd_run(rest: &[&str]) -> i32 {
         manual_altitude_range,
         seed,
         track_spec: cfg.track_spec,
+        altitude_profile: match altitude_profile {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("{e}");
+                return 1;
+            }
+        },
     };
     // --dry-run：只生成并自检，不上传、不提交。用来在真实提交前确认轨迹合法。
     if dry_run {

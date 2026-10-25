@@ -11,6 +11,43 @@ use super::model::Track;
 
 pub const ASCENT_NOISE_THRESHOLD_M: f64 = 0.15;
 
+/// 生成器的海拔曲线参数：基准海拔 + 上下震荡幅度。
+///
+/// 由本地用户填写，因为「本地地面海拔」没有任何可解析的来源（`ground_altitude`
+/// 原来硬编码 82.0，与场地实际无关）。实测口径：基准取场地常年读数的中位数，
+/// 震荡取上下摆动的半幅。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AltitudeProfile {
+    /// 基准海拔（米）：海拔曲线的中线。
+    pub base_m: f64,
+    /// 震荡幅度（米）：曲线在基准上下摆动的半幅，例如 ±3 m 填 3.0。
+    pub oscillation_m: f64,
+}
+
+impl Default for AltitudeProfile {
+    /// 未指定时的中性默认：沿用历史基线 82.0 m，幅度 1.08 m。
+    ///
+    /// 两个值都不代表任何真实场地，只为让未填参数的调用方保持旧行为。
+    fn default() -> Self {
+        Self {
+            base_m: 82.0,
+            oscillation_m: 1.08,
+        }
+    }
+}
+
+impl AltitudeProfile {
+    pub fn validate(self) -> Result<Self, String> {
+        if !self.base_m.is_finite() || !(-500.0..=9000.0).contains(&self.base_m) {
+            return Err("基准海拔必须是 -500 到 9000 米之间的数字".into());
+        }
+        if !self.oscillation_m.is_finite() || !(0.0..=200.0).contains(&self.oscillation_m) {
+            return Err("震荡幅度必须是 0 到 200 米之间的数字".into());
+        }
+        Ok(self)
+    }
+}
+
 pub fn positive_ascent_delta(delta_m: f64) -> f64 {
     if delta_m - ASCENT_NOISE_THRESHOLD_M > 1e-9 {
         delta_m

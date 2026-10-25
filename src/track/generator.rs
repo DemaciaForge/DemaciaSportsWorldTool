@@ -41,7 +41,7 @@ pub const SPEED_FIELD_ZERO_P: f64 = 0.16;
 pub const SPEED_FIELD_DROP_P: f64 = 0.02;
 pub const SPEED_FIELD_DROP_KMH: (f64, f64) = (0.9, 2.2);
 /// 海拔随里程的起伏量（米 / km）。
-pub const ALT_UNDULATION_M_PER_KM: f64 = 2.4;
+
 /// 逐点海拔噪声的标准差（米）。
 ///
 /// **未标定**：手上没有可信的真实跑步高程样本。曾用 `real/obs_*.json` 的
@@ -143,7 +143,16 @@ pub fn build(
     start_ms: i64,
     points_bd: &[(f64, f64)],
 ) -> Track {
-    build_with_fences(dist, dur, seed, _center, start_ms, points_bd, &[])
+    build_with_fences(
+        dist,
+        dur,
+        seed,
+        _center,
+        start_ms,
+        points_bd,
+        &[],
+        super::altitude::AltitudeProfile::default(),
+    )
 }
 
 #[cfg_attr(not(test), allow(dead_code))] // 仅供测试断言使用
@@ -165,7 +174,17 @@ pub fn build_stadium(
     points_bd: &[(f64, f64)],
     spec: TrackSpec,
 ) -> Result<Track, String> {
-    build_stadium_with_fences(dist, dur, seed, _center, start_ms, points_bd, spec, &[])
+    build_stadium_with_fences(
+        dist,
+        dur,
+        seed,
+        _center,
+        start_ms,
+        points_bd,
+        spec,
+        &[],
+        super::altitude::AltitudeProfile::default(),
+    )
 }
 
 /// 同 [`build_stadium`]，额外用电子围栏把跑道直道摆正到场地长边方向。
@@ -178,6 +197,7 @@ pub fn build_stadium_with_fences(
     points_bd: &[(f64, f64)],
     spec: TrackSpec,
     fences: &[Vec<(f64, f64)>],
+    altitude: super::altitude::AltitudeProfile,
 ) -> Result<Track, String> {
     let mut rng = Rng::new(seed);
     let mut ring = site_ring_with_fences(points_bd, spec, fences)?;
@@ -230,6 +250,7 @@ pub fn build_stadium_with_fences(
         // 不再造「进场段 / 离场段」（旧实现会让首尾点跑到围栏外十几米）。
         start_at_ring_origin: !fences.is_empty(),
         loop_m: None,
+        altitude,
         rng,
     }))
 }
@@ -243,6 +264,7 @@ pub fn build_with_fences(
     start_ms: i64,
     points_bd: &[(f64, f64)],
     fences: &[Vec<(f64, f64)>],
+    altitude: super::altitude::AltitudeProfile,
 ) -> Track {
     let mut rng = Rng::new(seed);
     let mut ring = site_ring_with_fences(points_bd, TrackSpec::Auto, fences)
@@ -285,6 +307,7 @@ pub fn build_with_fences(
         // 同上：有围栏就从环线原点起跑，全程留在场内。
         start_at_ring_origin: !fences.is_empty(),
         loop_m: None,
+        altitude,
         rng,
     })
 }
@@ -312,6 +335,8 @@ pub(crate) struct Assembly<'a> {
     pub rng: Rng,
     /// 本次实际沿路线跑到多远（米）。`None` = 由形态参数按目标距离换算。
     pub loop_m: Option<f64>,
+    /// 海拔曲线参数（基准 + 震荡幅度），由本地用户填写。
+    pub altitude: super::altitude::AltitudeProfile,
 }
 
 /// 兜底环：打卡点不足 3 个时用质心处的标准跑道。
@@ -359,6 +384,7 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         snap_radius_m: _,
         start_at_ring_origin,
         loop_m,
+        altitude,
         mut rng,
     } = a;
 
@@ -434,7 +460,7 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
 
     // ⑤ 逐点组装坐标（累计量在 ⑥ 里按实测几何统一重算）
     let mut locs: Vec<GenPoint> = Vec::with_capacity(n);
-    let alt0 = ground_altitude(ring.center);
+    let alt0 = altitude.base_m;
     let mut side_trip_left = if rng.random() < SIDE_TRIP_P && n > 12 {
         rng.randint(2, 4)
     } else {
@@ -625,7 +651,9 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         let lap_len = ring.ring_m.max(1.0);
         let lap_phase = (cum_i / lap_len) * std::f64::consts::TAU;
         let phase = (lap_phase * 2.0 + 0.7 * speeds[i]).sin();
-        let target_alt = alt0 + ALT_UNDULATION_M_PER_KM * (0.45 * lap_phase.sin() + 0.20 * phase);
+        // 主项按一圈周期（每圈回到同一高度），次项两倍频补细节；峰值约为
+        // `oscillation_m` 的 1.0 倍，因此「±3 m」填 3.0 就得到 6 m 的上下跨度。
+        let target_alt = alt0 + altitude.oscillation_m * (0.72 * lap_phase.sin() + 0.28 * phase);
         // 高程读数 = 缓慢起伏的目标曲线 + 逐点噪声。回拉系数 0.35 让曲线紧贴目标，
         // 不会自己漂走，因此不需要额外的边界约束。
         alt += 0.35 * (target_alt - alt) + rng.gauss(0.0, ALT_STEP_SIGMA_M);
@@ -763,12 +791,6 @@ fn nearest_arc(ring: &SiteRing, points_bd: &[(f64, f64)], rng: &mut Rng) -> f64 
     // 在最近点附近留 ±8 m 的随机（真人不会每天踩同一点）。
     let total = ring.ring_m.max(1.0);
     (best.1 + rng.uniform(-8.0, 8.0)).rem_euclid(total)
-}
-
-/// 地面海拔：由纬度粗估，作为海拔曲线的基线。
-fn ground_altitude(_center: (f64, f64)) -> f64 {
-    // 校园地面海拔与纬度没有解析关系；这里给一个中性基线，真实值由用户手动海拔覆盖。
-    82.0
 }
 
 /// 把打卡点吸附到最近采样点，但**只有当走过去的代价可以接受时才落位**。

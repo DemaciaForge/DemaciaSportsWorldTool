@@ -78,6 +78,12 @@ pub struct Config {
     /// Optional standard athletics-track preset; Auto preserves the legacy route.
     #[serde(default)]
     pub track_spec: TrackSpec,
+    /// 本地地面基准海拔（米）。空 = 用手指默认值。
+    #[serde(default)]
+    pub altitude_base_m: Option<f64>,
+    /// 海拔上下震荡幅度（米，半幅）。空 = 用手指默认值。
+    #[serde(default)]
+    pub altitude_oscillation_m: Option<f64>,
 }
 
 fn default_f32() -> f32 {
@@ -109,6 +115,8 @@ impl Default for Config {
             manual_altitude_range: None,
             update_check: default_update_check(),
             track_spec: TrackSpec::default(),
+            altitude_base_m: None,
+            altitude_oscillation_m: None,
         }
     }
 }

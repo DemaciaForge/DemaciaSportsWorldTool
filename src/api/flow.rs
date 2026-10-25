@@ -32,6 +32,8 @@ pub struct RunParams {
     pub seed: u64,
     /// 标准跑道规格：`Auto` = 按打卡点拟合环，其余 = 按椭圆跑道拟合（允许变形以经过点位）。
     pub track_spec: crate::track::stadium::TrackSpec,
+    /// 海拔曲线参数（基准 + 震荡幅度），由本地用户填写。
+    pub altitude_profile: crate::track::altitude::AltitudeProfile,
 }
 
 pub struct RunOutcome {
@@ -196,6 +198,14 @@ pub fn run_full_flow(
     // ① policy
     log("[policy] 拉取跑步策略…");
     let pol = fetch_policy(client)?;
+    // 冻结期门禁：真实客户端在 freezeRunTime > 0 时禁用开始按钮，账号在冻结期内
+    // 不会有任何跑步提交。这里必须在生成轨迹、拉点位、上传 OBS 之前就拦住。
+    if let Some(secs) = pol.frozen_for_secs() {
+        log(&format!(
+            "× [policy] 跑步冻结剩余 {secs} 秒（freezeRunTime={secs}）"
+        ));
+        return Err(pol.frozen_message());
+    }
     log(&format!(
         "√ [policy] ts={} policy={} minDistance={} validTime={}",
         pol.timestamp, pol.policy, pol.min_distance, pol.valid_time
@@ -286,7 +296,16 @@ pub fn run_full_flow(
                      center: (f64, f64),
                      start_ms: i64,
                      points_bd: &[(f64, f64)]| {
-        gen_track_fenced(dist, dur, seed, center, start_ms, points_bd, &layout_fences)
+        gen_track_fenced(
+            dist,
+            dur,
+            seed,
+            center,
+            start_ms,
+            points_bd,
+            &layout_fences,
+            params.altitude_profile,
+        )
     };
     let pts = points_ctx.points.clone();
     if pts.is_empty() {
@@ -381,6 +400,7 @@ pub fn run_full_flow(
             &pts_bd,
             params.track_spec,
             &layout_fences,
+            params.altitude_profile,
         )?
     } else {
         gen_track(
@@ -559,6 +579,7 @@ mod tests {
             manual_altitude_range: None,
             seed: 7,
             track_spec: crate::track::stadium::TrackSpec::Auto,
+            altitude_profile: crate::track::altitude::AltitudeProfile::default(),
         }
     }
 

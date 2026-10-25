@@ -336,6 +336,14 @@ impl App {
                 face_check: config.face_check,
                 plan: None,
                 track_spec: config.track_spec,
+                altitude_base: config
+                    .altitude_base_m
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                altitude_osc: config
+                    .altitude_oscillation_m
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
                 custom_track_length: match config.track_spec {
                     crate::track::stadium::TrackSpec::Custom { total_m } => total_m.to_string(),
                     _ => "400".into(),

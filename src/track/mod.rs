@@ -395,3 +395,87 @@ mod altitude_calibration_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod diag_profile {
+    use super::altitude::{self, AltitudeProfile};
+    use super::generator::build_stadium_with_fences;
+    use super::stadium::TrackSpec;
+
+    fn cache_json(name: &str) -> serde_json::Value {
+        let p = format!(r"D:\running\DemaciaSportsWorldTool\target\debug\{}", name);
+        serde_json::from_str(&std::fs::read_to_string(p).expect("读")).expect("析")
+    }
+
+    #[test]
+    fn profile_12_plus_minus_3() {
+        let ident = cache_json("identity.json");
+        let anchor = (
+            ident["anchor_lat"].as_f64().unwrap(),
+            ident["anchor_lon"].as_f64().unwrap(),
+        );
+        let pc = cache_json("points_cache.json");
+        let pts: Vec<(f64, f64)> = pc["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p["lat"].as_f64().unwrap(), p["lon"].as_f64().unwrap()))
+            .collect();
+        let fences: Vec<Vec<(f64, f64)>> = {
+            let v: serde_json::Value =
+                serde_json::from_str(pc["geo_fences_json"].as_str().unwrap()).unwrap();
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|f| {
+                    f["points"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|p| (p["lat"].as_f64().unwrap(), p["lng"].as_f64().unwrap()))
+                        .collect()
+                })
+                .collect()
+        };
+        let prof = AltitudeProfile {
+            base_m: 12.0,
+            oscillation_m: 3.0,
+        };
+        eprintln!("参数: 基准 12.0 m, 震荡 ±3.0 m（真实记录口径）");
+        eprintln!(
+            "{:<7} {:>7} {:>7} {:>8} {:>7} {:>8} {:>8}",
+            "距离", "最小", "最大", "跨度", "首末差", "爬升", "爬升/km"
+        );
+        for dist in [2000.0, 3000.0, 4000.0] {
+            for seed in [1915881480u64, 42] {
+                let dur = (dist / 1000.0 * 420.0) as i64;
+                let t = build_stadium_with_fences(
+                    dist,
+                    dur,
+                    seed,
+                    anchor,
+                    1792916403089,
+                    &pts,
+                    TrackSpec::M400,
+                    &fences,
+                    prof,
+                )
+                .unwrap();
+                let a: Vec<f64> = t.locations.iter().map(|p| p.bdA).collect();
+                let mn = a.iter().cloned().fold(f64::INFINITY, f64::min);
+                let mx = a.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let g = altitude::total_ascent_of(&t);
+                eprintln!(
+                    "{:<7.0} {:>7.2} {:>7.2} {:>8.2} {:>+7.2} {:>8.1} {:>8.1}",
+                    dist,
+                    mn,
+                    mx,
+                    mx - mn,
+                    a[a.len() - 1] - a[0],
+                    g,
+                    g / (dist / 1000.0)
+                );
+            }
+        }
+    }
+}

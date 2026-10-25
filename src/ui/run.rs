@@ -24,6 +24,10 @@ pub struct RunPage {
     pub track_spec: crate::track::stadium::TrackSpec,
     /// Custom oval measurement-line length, kept as text while editing.
     pub custom_track_length: String,
+    /// 本地地面基准海拔（米），留空用手指默认值。
+    pub altitude_base: String,
+    /// 海拔上下震荡幅度（米，半幅），留空用手指默认值。
+    pub altitude_osc: String,
 
     /// 预览是否过期（参数变更后置真）
     pub preview_stale: bool,
@@ -203,6 +207,28 @@ impl App {
                 );
                 ui.label("留空自动；可填 17.2 或 11.6-22.8");
             });
+            mobile::row(ui, |ui| {
+                ui.label("基准海拔（米）：");
+                mobile::text_edit(
+                    ui,
+                    "run_altitude_base",
+                    &mut page.altitude_base,
+                    crate::platform::InputKind::Text,
+                    80.0,
+                );
+                ui.label("本地地面常年读数，留空用默认");
+            });
+            mobile::row(ui, |ui| {
+                ui.label("海拔震荡（米）：");
+                mobile::text_edit(
+                    ui,
+                    "run_altitude_osc",
+                    &mut page.altitude_osc,
+                    crate::platform::InputKind::Text,
+                    80.0,
+                );
+                ui.label("上下摆动的半幅，例如 ±3 填 3");
+            });
             // 起跑时刻恒为「现在 − 用时」，提交的永远是刚刚跑完的那一段，
             // 因此页面上不再提供开始时间控件。
 
@@ -339,6 +365,34 @@ impl App {
                 return;
             }
         };
+        let defaults = crate::track::altitude::AltitudeProfile::default();
+        let parse_alt_field = |text: &str, fallback: f64| -> Option<f64> {
+            let t = text.trim();
+            if t.is_empty() {
+                Some(fallback)
+            } else {
+                t.parse::<f64>().ok()
+            }
+        };
+        let (Some(base_m), Some(oscillation_m)) = (
+            parse_alt_field(&page.altitude_base, defaults.base_m),
+            parse_alt_field(&page.altitude_osc, defaults.oscillation_m),
+        ) else {
+            self.status = "基准海拔与海拔震荡必须是数字（或留空用默认）".into();
+            return;
+        };
+        let candidate = crate::track::altitude::AltitudeProfile {
+            base_m,
+            oscillation_m,
+        };
+        let altitude_profile = match candidate.validate() {
+            Ok(p) => p,
+            Err(e) => {
+                self.status = e;
+                return;
+            }
+        };
+
         let (manual_altitude, manual_altitude_range) = match altitude_spec {
             None => (None, None),
             Some(crate::track::altitude::AltitudeSpec::Single(value)) => (Some(value), None),
@@ -372,6 +426,8 @@ impl App {
         self.config.manual_altitude = manual_altitude;
         self.config.manual_altitude_range = manual_altitude_range;
         self.config.track_spec = track_spec;
+        self.config.altitude_base_m = Some(altitude_profile.base_m);
+        self.config.altitude_oscillation_m = Some(altitude_profile.oscillation_m);
         let _ = crate::api::model::save_config(&self.config);
 
         let identity = self.identity.clone();
@@ -397,6 +453,7 @@ impl App {
                 manual_altitude_range,
                 seed,
                 track_spec,
+                altitude_profile,
             };
             let payload = match crate::api::flow::run_full_flow(&mut client, &params, &mut log) {
                 Ok(out) => {
