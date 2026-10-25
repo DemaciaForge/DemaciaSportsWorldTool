@@ -565,10 +565,13 @@ mod config_tests {
     use super::*;
 
     #[test]
-    fn legacy_config_defaults_to_auto_track_mode() {
+    fn config_defaults_to_400m_track() {
+        // 缺省按 400 m 标准跑道拟合；`auto`（打卡点环）需要显式配置。
         let config: Config = serde_json::from_str("{}").unwrap();
-        assert_eq!(config.track_spec, TrackSpec::Auto);
-        assert_eq!(Config::default().track_spec, TrackSpec::Auto);
+        assert_eq!(config.track_spec, TrackSpec::M400);
+        assert_eq!(Config::default().track_spec, TrackSpec::M400);
+        let legacy: Config = serde_json::from_str(r#"{"track_spec":"auto"}"#).unwrap();
+        assert_eq!(legacy.track_spec, TrackSpec::Auto);
     }
 }
 

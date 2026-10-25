@@ -19,8 +19,10 @@ pub enum TrackSpec {
 }
 
 impl Default for TrackSpec {
+    /// 缺省按 400 m 标准跑道拟合：真人跑操场跑的就是椭圆，
+    /// 打卡点环（`Auto`）留给需要精确经过每个点位的场合。
     fn default() -> Self {
-        Self::Auto
+        Self::M400
     }
 }
 

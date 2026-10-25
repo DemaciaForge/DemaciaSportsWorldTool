@@ -216,7 +216,9 @@ pub fn build_stadium_with_fences(
         speeds: w,
         snap_points_bd: points_bd,
         snap_radius_m: 40.0,
-        start_at_ring_origin: false,
+        // 有围栏 = 知道场地边界 = 人已经在场内，直接从路线原点起跑，
+        // 不再造「进场段 / 离场段」（旧实现会让首尾点跑到围栏外十几米）。
+        start_at_ring_origin: !fences.is_empty(),
         loop_m: None,
         rng,
     }))
@@ -270,7 +272,8 @@ pub fn build_with_fences(
         speeds: w,
         snap_points_bd: points_bd,
         snap_radius_m: 40.0,
-        start_at_ring_origin: false,
+        // 同上：有围栏就从环线原点起跑，全程留在场内。
+        start_at_ring_origin: !fences.is_empty(),
         loop_m: None,
         rng,
     })
@@ -604,10 +607,15 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
             let sigma = (kmh * SPEED_FIELD_MEAN_NOISE).max(SPEED_FIELD_MIN_NOISE);
             round_to((kmh + rng.gauss(0.0, sigma)).max(0.3), 4)
         };
-        // 海拔：每米计起伏 + 与配速同相
-        let km_done = cum_i / 1000.0;
-        let phase = (km_done * std::f64::consts::TAU / 0.9 + 0.7 * speeds[i]).sin();
-        let target_alt = alt0 + ALT_UNDULATION_M_PER_KM * (km_done * 1.6 + 0.35 * phase);
+        // 海拔：起伏必须按**圈**周期，闭环每圈回到同一高度、全程净漂移为 0。
+        //
+        // 旧实现用 `cum_i / 1000 × 1.6` 做累积爬升（每公里 +3.84 m）：跑 5 圈 400 m
+        // 会凭空升高 8 m，海拔曲线是一条单调上升的斜坡——操场是平的，这是明显的假。
+        // 现在主项按 `ring_m`（一圈周长）取正弦，次项用两倍频补细节，起点与终点等高。
+        let lap_len = ring.ring_m.max(1.0);
+        let lap_phase = (cum_i / lap_len) * std::f64::consts::TAU;
+        let phase = (lap_phase * 2.0 + 0.7 * speeds[i]).sin();
+        let target_alt = alt0 + ALT_UNDULATION_M_PER_KM * (0.45 * lap_phase.sin() + 0.20 * phase);
         alt += 0.35 * (target_alt - alt) + rng.gauss(0.0, 0.12);
         locs[i].bdA = round_to(alt, 2);
         // 航向：本段前进方向 + 抖动

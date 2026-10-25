@@ -29,10 +29,8 @@ pub struct RunParams {
     pub manual_altitude: Option<f64>,
     /// 用户手动填写的海拔范围；与单值字段兼容，范围优先。
     pub manual_altitude_range: Option<crate::track::altitude::AltitudeRange>,
-    /// 详情页路线颜色模式。
     pub seed: u64,
-    /// 路线算法模式。
-    /// Optional standard athletics-track preset; Auto preserves route_mode behavior.
+    /// 标准跑道规格：`Auto` = 按打卡点拟合环，其余 = 按椭圆跑道拟合（允许变形以经过点位）。
     pub track_spec: crate::track::stadium::TrackSpec,
 }
 
