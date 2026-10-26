@@ -41,3 +41,4 @@ docs/_preview.png
 # 从服务器拉回的真实轨迹样本（含账号数据，不入库）
 real/
 /real_lly
+out.txt
