@@ -374,6 +374,41 @@ mod gate_tests {
         })
     }
 
+    /// 里程不足必须提前拦住，否则提交必被判「里程不足」。
+    #[test]
+    fn distance_below_minimum_is_rejected() {
+        let v = json!({
+            "error": 10000, "message": "成功",
+            "data": {
+                "policy": 1, "timestamp": 1i64,
+                "runRuleModel": { "minDistance": 2000, "faceVerify": false },
+                "freezeRunTime": 0
+            }
+        });
+        let p = parse_policy_response(&v).unwrap();
+        assert!(ensure_distance_ok(&p, 2000.0).is_ok());
+        assert!(ensure_distance_ok(&p, 2500.0).is_ok());
+        // 1.0-1.5 km 的旧默认值会被拦住
+        assert!(ensure_distance_ok(&p, 1400.0).is_err());
+        assert!(ensure_distance_ok(&p, 1999.0).is_err());
+        let msg = ensure_distance_ok(&p, 1400.0).unwrap_err();
+        assert!(msg.contains("2000"), "应提示需要多少米: {msg}");
+    }
+
+    /// 规则缺失（冻结期响应）时不因里程拦人，交给冻结门禁报错。
+    #[test]
+    fn distance_check_skipped_when_rule_absent() {
+        let mut v = json!({
+            "error": 10000, "message": "成功",
+            "data": { "policy": 0, "timestamp": 0i64, "runRuleModel": null, "freezeRunTime": 642421 }
+        });
+        v["data"]["freezeRunTime"] = json!(642421);
+        let p = parse_policy_response(&v).unwrap();
+        assert!(p.run_rule_absent());
+        assert!(ensure_distance_ok(&p, 100.0).is_ok());
+        assert!(ensure_not_frozen(&p).is_err());
+    }
+
     /// 冻结中必须拦住，未冻结必须放行。
     #[test]
     fn gate_blocks_only_when_frozen() {
@@ -396,4 +431,27 @@ mod gate_tests {
         assert!(p.run_rule_absent() || p.min_distance == 0);
         assert!(ensure_not_frozen(&p).is_err(), "规则缺失不该影响冻结判定");
     }
+}
+
+/// 检查本次计划距离是否达到学校要求的最低里程。
+///
+/// 不达标时服务端会直接判「里程不足」（`reasonList` 里的最短距离项），
+/// 白白消耗一次提交机会。这里提前拦住并告诉用户该填多少。
+pub fn ensure_distance_ok(pol: &PolicyInfo, planned_m: f64) -> Result<(), String> {
+    if pol.run_rule_absent() {
+        // 规则缺失时不拦：那是冻结期的响应，冻结门禁会先报错。
+        return Ok(());
+    }
+    let need = pol.min_distance as f64;
+    if need > 0.0 && planned_m + 0.5 < need {
+        return Err(format!(
+            "本次里程 {:.0} m 低于学校要求的 {} m，提交会被判里程不足。\n             请把「距离范围」两端的公里数都填到 {} 以上（例如 {:.1} - {:.1}）。",
+            planned_m,
+            pol.min_distance,
+            need / 1000.0,
+            need / 1000.0,
+            need / 1000.0 + 0.5
+        ));
+    }
+    Ok(())
 }

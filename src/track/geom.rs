@@ -105,7 +105,7 @@ pub fn make_point_ring_in_order(bd_points: &[(f64, f64)]) -> PointRing {
     let n = bd_points.len();
     let cx = bd_points.iter().map(|q| q.0).sum::<f64>() / n as f64;
     let cy = bd_points.iter().map(|q| q.1).sum::<f64>() / n as f64;
-    let mut ordered = bd_points.to_vec();
+    let ordered = bd_points.to_vec();
     let plane: Vec<(f64, f64)> = ordered
         .iter()
         .map(|q| ((q.1 - cy) * MET_PER_DEG_LNG, (q.0 - cx) * MET_PER_DEG_LAT))

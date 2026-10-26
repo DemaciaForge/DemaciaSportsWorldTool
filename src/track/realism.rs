@@ -89,6 +89,21 @@ impl AuthenticityReport {
         format!("{}/{} 项通过", total - failed, total)
     }
 
+    /// 只列失败项，一行一项。用于错误信息里指明到底哪项没过。
+    pub fn failed_brief(&self) -> String {
+        let items: Vec<String> = self
+            .checks
+            .iter()
+            .filter(|c| c.applicable && !c.pass)
+            .map(|c| format!("{}={:.3}（允许 {}）", c.name, c.value, c.limit))
+            .collect();
+        if items.is_empty() {
+            "无".to_string()
+        } else {
+            items.join("；")
+        }
+    }
+
     /// 逐项读数（多行），失败项带 ✗。
     #[cfg_attr(not(test), allow(dead_code))] // 报告明细，测试断言在用
     pub fn detail(&self) -> String {

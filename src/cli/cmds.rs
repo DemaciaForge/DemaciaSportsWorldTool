@@ -195,7 +195,9 @@ fn cmd_run(rest: &[&str]) -> i32 {
     let dist = if dist_km > 0.0 {
         dist_km as f64 * 1000.0
     } else {
-        (1.0 + rand::random::<f32>() * 0.5) as f64 * 1000.0
+        // 未指定时随机 2.0-2.5 km。多数学校 minDistance 是 2000 m，
+        // 低于它提交必被判里程不足（flow 里 ensure_distance_ok 也会拦）。
+        (2.0 + rand::random::<f32>() * 0.5) as f64 * 1000.0
     };
     let pace_s = if pace > 0.0 {
         pace

@@ -236,7 +236,7 @@ impl App {
                 ui.label("人脸校验标记：");
                 ui.checkbox(
                     &mut page.face_check,
-                    "faceCheck=1（学校未开人脸时请取消勾选）",
+                    "强制报 faceCheck=1（一般不用勾，留空即跟随学校配置）",
                 );
             });
 
@@ -409,7 +409,9 @@ impl App {
         };
         let (dist, dur) = (plan.dist * 1000.0, plan.dur); // 米
         let start_ms = plan.start_ms;
-        let face_check = Some(if page.face_check { 1 } else { 0 });
+        // 不勾选 -> None，跟随学校策略里的 faceVerify；勾选才显式报 1。
+        // 这样换学校不用改代码：开了人脸的学校会自动报 1，没开的报 0。
+        let face_check = page.face_check.then_some(1);
 
         let track_spec = match page.track_spec {
             crate::track::stadium::TrackSpec::Custom { .. } => {

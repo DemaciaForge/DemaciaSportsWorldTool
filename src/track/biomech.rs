@@ -22,15 +22,23 @@ pub struct Gait {
 ///
 /// 步频随速度升高，疲劳略降步频；步幅落在 [0.5, 1.7] 包络内。
 pub fn gait(v: f64, fatigue: f64) -> Gait {
-    let target_cad = (150.0 + 12.0 * v) * (1.0 - 0.05 * fatigue);
-    let mut cadence = target_cad.clamp(110.0, 220.0);
+    // 先定步幅、再反解步频。
+    //
+    // 原来是「步频 = 150 + 12v」再算步幅，慢配速下步幅会掉到 0.72 m
+    // （超出真实包络）；而真实跑者慢配速时是靠**降步频**而不是
+    // 随便缩步幅。实测通过审核的记录：5:30-6:07/km 时步频 120-126。
+    // 步幅目标取 1.0 m 附近（真实跑步的典型值），由它反解步频：
+    // 2.1 m/s -> 约 124 步/分，2.8 m/s -> 约 165 步/分。
+    let stride_target = (1.00 + 0.02 * v).clamp(0.85, 1.15);
+    let mut cadence = (v * 60.0 / stride_target) * (1.0 - 0.05 * fatigue);
+    cadence = cadence.clamp(110.0, 220.0);
     let mut stride = v * 60.0 / cadence;
     // 步幅越界时反解步频，保持等式成立。
     if stride > 1.7 {
         stride = 1.7;
         cadence = v * 60.0 / stride;
-    } else if stride < 0.5 {
-        stride = 0.5;
+    } else if stride < 0.78 {
+        stride = 0.78;
         cadence = v * 60.0 / stride;
     }
     Gait { cadence, stride }

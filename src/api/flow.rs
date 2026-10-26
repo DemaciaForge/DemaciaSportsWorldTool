@@ -218,6 +218,7 @@ pub fn run_full_flow(
         ));
     }
     crate::api::policy::ensure_not_frozen(&pol)?;
+    crate::api::policy::ensure_distance_ok(&pol, params.dist)?;
     log(&format!(
         "√ [policy] ts={} policy={} minDistance={} validTime={}",
         pol.timestamp, pol.policy, pol.min_distance, pol.valid_time
@@ -422,28 +423,48 @@ pub fn run_full_flow(
     } else {
         params.track_spec
     };
-    let mut track = if effective_spec != crate::track::stadium::TrackSpec::Auto {
-        log(&format!("[track] 使用{}操场模式", effective_spec.label()));
-        crate::track::generator::build_stadium_with_fences(
-            params.dist,
-            params.dur,
-            params.seed,
-            (anchor.latitude, anchor.longitude),
-            start_ms,
-            &pts_bd,
-            effective_spec,
-            &layout_fences,
-            params.altitude_profile,
-        )?
-    } else {
-        gen_track(
-            params.dist,
-            params.dur,
-            params.seed,
-            (anchor.latitude, anchor.longitude),
-            start_ms,
-            &pts_bd,
-        )
+    // 生成 + 距离自洽校正：内部按曲线弧长给出 totalDis，而服务端按 GPS 弦长
+    // 换算里程，两者相差约 2%。超出保守阈值就换种子重生成（最多 3 次），
+    // 免得把一条注定被互校拦下的轨迹交给后面。最多试 5 个种子。
+    let build_with_seed = |seed: u64| -> Result<crate::track::model::Track, String> {
+        if effective_spec != crate::track::stadium::TrackSpec::Auto {
+            crate::track::generator::build_stadium_with_fences(
+                params.dist,
+                params.dur,
+                seed,
+                (anchor.latitude, anchor.longitude),
+                start_ms,
+                &pts_bd,
+                effective_spec,
+                &layout_fences,
+                params.altitude_profile,
+            )
+        } else {
+            Ok(gen_track(
+                params.dist,
+                params.dur,
+                seed,
+                (anchor.latitude, anchor.longitude),
+                start_ms,
+                &pts_bd,
+            ))
+        }
+    };
+    let mut track = {
+        let mut picked = build_with_seed(params.seed)?;
+        for attempt in 1..=4u64 {
+            let measured = chord_path_len(&picked);
+            let ratio = measured / picked.totalDistance.max(1.0);
+            if (ratio - 1.0).abs() <= 0.018 {
+                break;
+            }
+            log(&format!(
+                "[track] 第 {} 次生成距离自洽度 {:.3} 偏低，换种子重试",
+                attempt, ratio
+            ));
+            picked = build_with_seed(params.seed.wrapping_add(attempt * 7919))?;
+        }
+        picked
     };
     if let Some(range) = params.manual_altitude_range {
         crate::track::altitude::override_bd_a_range(&mut track, range)?;
@@ -485,8 +506,9 @@ pub fn run_full_flow(
         }
         if !report.passed() {
             return Err(format!(
-                "轨迹未通过真实性互校（{}），已中止提交以避免被服务端判为无效记录",
-                report.summary()
+                "轨迹未通过真实性互校（{}）：{}\n已中止提交，避免被服务端判为无效记录。\n                 可换一个随机版本重试（GUI 点「换一版」）。",
+                report.summary(),
+                report.failed_brief()
             ));
         }
     }
@@ -663,3 +685,23 @@ use chrono::TimeZone as _;
 
 /// 最近一次详情验证的完整响应（达标判定明细在 reasonList）。
 pub static VERIFY_DETAIL: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+
+/// 按相邻定位点弦长累加的路径长度（米）。
+///
+/// 服务端拿提交的经纬度换算里程用的就是这个量，而不是我们内部生成时沿曲线
+/// 走过的弧长。两者在 2 km 上差 2% 左右，用它可以提前判断这条轨迹的距离
+/// 自洽度会不会被互校拦下。
+fn chord_path_len(track: &crate::track::model::Track) -> f64 {
+    use crate::track::geom::{MET_PER_DEG_LAT, MET_PER_DEG_LNG};
+    let locs = &track.locations;
+    if locs.len() < 2 {
+        return 0.0;
+    }
+    let mut acc = 0.0;
+    for i in 1..locs.len() {
+        let (plat, plng) = (locs[i - 1].gLat, locs[i - 1].gLng);
+        let (lat, lng) = (locs[i].gLat, locs[i].gLng);
+        acc += ((lat - plat) * MET_PER_DEG_LAT).hypot((lng - plng) * MET_PER_DEG_LNG);
+    }
+    acc
+}
