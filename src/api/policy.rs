@@ -8,6 +8,9 @@ use serde_json::{json, Value};
 pub const POLICY_PATH: &str = "/api/v70103/runModePolicy";
 
 pub struct PolicyInfo {
+    /// 服务端是否下发了 `runRuleModel`。为 false 时后面那些规则字段都是兜底值，
+    /// **不可当作学校配置使用**（冻结期就是这种响应）。
+    pub run_rule_present: bool,
     pub timestamp: i64,
     pub policy: i64,
     pub min_distance: i64,
@@ -110,6 +113,7 @@ pub(crate) fn parse_policy_response(biz: &Value) -> Result<PolicyInfo, String> {
         .cloned()
         .unwrap_or(Value::Null);
     Ok(PolicyInfo {
+        run_rule_present: !rule.is_null(),
         timestamp,
         policy,
         min_distance: rule
@@ -323,5 +327,73 @@ mod freeze_tests {
             parse_policy_response(&v).unwrap().frozen_for_secs(),
             Some(1800)
         );
+    }
+}
+
+impl PolicyInfo {
+    /// 服务端没有下发 `runRuleModel`（一律 null）。
+    ///
+    /// 冻结期间就是这样：既然不让你跑，就没必要下发规则。此时拿到的
+    /// `policy` / `min_distance` / 顺逆序模式都不可信，不能当学校配置用。
+    pub fn run_rule_absent(&self) -> bool {
+        !self.run_rule_present
+    }
+}
+
+/// 提交前的冻结门禁：冻结中返回错误，未冻结返回 Ok。
+///
+/// 从 `run_full_flow` 里抽出来单独可测——门禁一旦漏掉，程序会在冻结期发包，
+/// 服务端看到的就是「封禁账号仍在提交跑步记录」。真实客户端在冻结期内
+/// 「开始跑步」按钮是禁用的，本来不该有任何提交。
+pub fn ensure_not_frozen(pol: &PolicyInfo) -> Result<(), String> {
+    match pol.frozen_for_secs() {
+        Some(_) => Err(pol.frozen_message()),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn response(freeze: i64) -> serde_json::Value {
+        json!({
+            "error": 10000,
+            "message": "成功",
+            "data": {
+                "policy": 1,
+                "timestamp": 1792977297717i64,
+                "runRuleModel": { "minDistance": 2000, "faceVerify": false },
+                "geoFence": null,
+                "runFreezeTime": null,
+                "freezeRunTime": freeze,
+                "runAreaModels": null,
+                "runFaceCheckConfigDTO": null
+            }
+        })
+    }
+
+    /// 冻结中必须拦住，未冻结必须放行。
+    #[test]
+    fn gate_blocks_only_when_frozen() {
+        let open = parse_policy_response(&response(0)).unwrap();
+        assert!(ensure_not_frozen(&open).is_ok());
+
+        let frozen = parse_policy_response(&response(642421)).unwrap();
+        let err = ensure_not_frozen(&frozen).unwrap_err();
+        assert!(err.contains("冻结"), "错误信息应说明冻结: {err}");
+        assert!(err.contains("7"), "应含剩余天数: {err}");
+    }
+
+    /// 冻结期响应里 runRuleModel 往往是 null，门禁仍必须生效。
+    #[test]
+    fn gate_blocks_even_without_rule_model() {
+        let mut v = response(3600);
+        v["data"]["runRuleModel"] = json!(null);
+        v["data"]["policy"] = json!(0);
+        let p = parse_policy_response(&v).unwrap();
+        assert!(p.run_rule_absent() || p.min_distance == 0);
+        assert!(ensure_not_frozen(&p).is_err(), "规则缺失不该影响冻结判定");
     }
 }

@@ -208,12 +208,16 @@ pub fn run_full_flow(
         pol.sequence_rule,
         pol.sequence_strength
     ));
+    if pol.run_rule_absent() {
+        log("⚠ [policy] 服务端未下发 runRuleModel，本次目标距离/配速区间等均为兜底值");
+    }
+    // 冻结门禁必须在生成轨迹、拉点位、上传 OBS 之前。
     if let Some(secs) = pol.frozen_for_secs() {
         log(&format!(
             "× [policy] 跑步冻结剩余 {secs} 秒（freezeRunTime={secs}）"
         ));
-        return Err(pol.frozen_message());
     }
+    crate::api::policy::ensure_not_frozen(&pol)?;
     log(&format!(
         "√ [policy] ts={} policy={} minDistance={} validTime={}",
         pol.timestamp, pol.policy, pol.min_distance, pol.valid_time

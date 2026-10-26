@@ -123,7 +123,12 @@ fn cmd_run(rest: &[&str]) -> i32 {
         return match crate::api::policy::fetch_policy(&mut client) {
             Ok(pol) => {
                 println!("策略响应：");
-                println!("  目标距离      {} m", pol.min_distance);
+                if pol.run_rule_absent() {
+                    println!("  目标距离      （服务端未下发规则 runRuleModel=null）");
+                    println!("                ↑ 冻结期就是这种响应，下面的值都不可信");
+                } else {
+                    println!("  目标距离      {} m", pol.min_distance);
+                }
                 println!("  点位模式      {}", pol.sequence_mode());
                 println!("  sequenceRule      {}", pol.sequence_rule);
                 println!("  sequenceStrength  {}", pol.sequence_strength);
