@@ -290,9 +290,15 @@ impl App {
             });
         }
 
-        // 进入跑步页即拉一次围栏与点位：围栏用于把跑道直道摆正到场地长边方向，
+        // 进入跑步页拉一次围栏与点位：围栏用于把跑道直道摆正到场地长边方向，
         // 点位用于拟合打卡点环与预览。
-        self.refresh_points();
+        //
+        // 注意 `draw_run_content` 每帧都会执行，这里必须用标记挡住，
+        // 否则会以帧率拉点位（日志刷屏 + 打满点位接口的限流额度）。
+        if !self.run_points_requested {
+            self.run_points_requested = true;
+            self.refresh_points();
+        }
 
         ui.add_space(8.0);
         let fmt_pace = |s: f32| format!("{}:{:02}", (s / 60.0) as i64, (s as i64) % 60);

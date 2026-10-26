@@ -70,6 +70,12 @@ pub struct App {
     pub popup: Option<PopupInfo>,
 
     pub tab: usize,
+    /// 跑步页是否已经触发过点位拉取。
+    ///
+    /// 跑步页 `draw_run_content` 每帧执行；若在帧里无条件 `refresh_points`，
+    /// 60 fps 下就是每秒 60 次请求，日志刷屏还会打满点位接口的限流。
+    /// 这个标记保证每次进入跑步页只拉一次。
+    pub run_points_requested: bool,
     pub run_page: run::RunPage,
     pub records_page: records::RecordsPage,
     pub data_page: data::DataPage,
@@ -248,7 +254,13 @@ impl eframe::App for App {
 
         // ── 标签页 ──────────────────────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
+            let tab_before = self.tab;
             mobile::tab_bar(ui, &mut self.tab);
+            // 切回跑步页时重新拉一次点位：标记只挡「同一页面内的每帧重复」，
+            // 不能挡住用户主动来回切页。
+            if self.tab != tab_before && self.tab == 0 {
+                self.run_points_requested = false;
+            }
             ui.separator();
             match self.tab {
                 0 => self.draw_run(ui),
@@ -323,6 +335,7 @@ impl App {
             status: "就绪".into(),
             popup: None,
             tab: 0,
+            run_points_requested: false,
             run_page: run::RunPage {
                 dist_min: config.dist_min,
                 dist_max: config.dist_max,
