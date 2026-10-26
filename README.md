@@ -96,24 +96,86 @@
 
 ## 使用
 
-双击 exe 进入 GUI；CLI 用法：
+双击 exe 进入 GUI。
+
+### 第一次使用
+
+1. 打开「我的」页，填手机号和密码登录（凭据只存本地）
+2. 打开「设备信息」页，**填本校区坐标**（定位锚点）和城市。
+   默认锚点是大连，不填会拒绝提交
+3. 回「跑步」页。GUI 没有 dry-run 按钮，要自检请先用命令行
+   `run --dry-run` 确认轨迹正常（见下）
+4. 确认无误再点「开始跑步」
+
+### 推荐的工作流
+
+先只读、再实跑。前三个命令都不会提交任何跑步记录：
+
+```bash
+# ① 看学校配置：目标距离、是否顺序跑、有没有人脸、是否在冻结期
+demaciasportsworldtool run --policy-only
+
+# ② 违规自查：自己是否被标记
+demaciasportsworldtool cheat
+
+# ③ 有被标记的记录时，看复核意见
+demaciasportsworldtool appeal --rrid <记录号> --details
+
+# ④ 本地生成并自检（不登录、不联网、不上传），确认轨迹合法
+demaciasportsworldtool run --dry-run --dist 2 --pace 420
+
+# ⑤ 确认无误再真正提交
+demaciasportsworldtool run --dist 2 --pace 420
+```
+
+### GUI 用法
+
+「跑步」页从上到下：
+
+| 控件 | 说明 |
+|---|---|
+| 距离范围 | 每次随机落在这个区间内，如 `2.0 - 2.5` 公里 |
+| 配速范围 | 秒/公里，如 `390 - 480` 即 6:30–8:00 |
+| 操场规格 | 留「自动」即可；顺序跑学校会自动改用点位环 |
+| 手动海拔（米/区间） | **不建议用**，会把海拔带固定成一个跨度。详见[海拔](#海拔) |
+| 基准海拔（米） | 本地地面常年读数，留空自动 |
+| 海拔震荡（米） | 上下摆动的**半幅**，例如 ±3 m 就填 `3` |
+| 人脸校验标记 | 学校没开人脸抽检时**取消勾选**，否则等于谎报做过校验 |
+| 换一版 | 重新抽样距离与配速，不联网 |
+| 开始跑步 | 真正提交 |
+
+GUI **不提供** dry-run。想先验证轨迹合法性，用命令行
+`demaciasportsworldtool run --dry-run`，它不登录、不联网、不上传。
+
+提交过程约 10–30 秒，日志会实时显示策略、点位、轨迹、提交、OBS、验证各步。
+
+### 全部 CLI 命令
 
 ```text
-demaciasportsworldtool login --user <手机号> --pass <密码> [--remember]
-demaciasportsworldtool logout
-demaciasportsworldtool run                       # 一键跑步
-demaciasportsworldtool run --dry-run --dist 2 --pace 420
-                                                 # 本地生成并自检，不登录、不联网、不上传
-demaciasportsworldtool run --altitude 17.2       # 固定海拔；或 11.6-22.8 映射到区间
-demaciasportsworldtool records                   # 跑步记录列表
-demaciasportsworldtool semester                  # 学期完成度
-demaciasportsworldtool cheat [--page n]          # 违规自查
-demaciasportsworldtool rank main --type 1 --sort 1
-demaciasportsworldtool obs-real [--rrid n]       # 拉回真实 OBS 原始轨迹
-demaciasportsworldtool ledger [--all] [--hint]   # 本地提交台账
-demaciasportsworldtool template --file run.gpx   # 本地分析真实记录海拔（不会上传）
-demaciasportsworldtool update [--check]
-demaciasportsworldtool help                      # 全部命令
+login --user <手机号> --pass <密码> [--remember]   登录；--remember 存凭据以便自动重登
+logout                                            登出并清理本地会话
+
+run                                              一键跑步（随机距离 / 配速）
+run --dist 2 --pace 420                          指定 2 km、7:00/km
+run --dry-run                                    仅本地构造与自检，不联网
+run --policy-only                                只拉策略打印配置，不提交
+run --altitude-base 15 --altitude-osc 3          指定基准海拔与震荡半幅
+run --lat 39.4930 --lon 116.2550                 临时改定位锚点
+run --seed 42                                    固定随机种子（复现用）
+
+records                                          跑步记录列表
+semester                                         学期完成度
+cheat [--page n]                                 违规自查
+appeal --rrid <id> [--details]                   申诉状态 / 设备取证详情
+rank main --type 1 --sort 1                      排行榜（1个人 2班级 3院系；1日 2月）
+rank indoor --range 1                            室内榜
+rank history --sort 1                            历史榜
+
+obs-real [--rrid n]                              拉回真实 OBS 原始轨迹
+ledger [--all] [--hint]                          本地提交台账
+template --file run.gpx                          本地分析真实记录海拔
+update [--check]                                 检查更新
+help                                             全部命令
 ```
 
 ### 起跑时刻
@@ -136,6 +198,16 @@ demaciasportsworldtool help                      # 全部命令
 
 同理，「手动海拔」输入一个固定值（所有点同高）也不是真实形态——真机高程始终在波动，
 只是幅度不大。要看绝对高度对得上，填基准海拔即可；要精确压平曲线，才用固定值。
+
+`--altitude` / 区间形式的 `--altitude 6-22` 仍保留兼容，但它把曲线**映射到一个固定跨度**，
+每次提交的跨度都一样。**日常不要用**，除非是配合 `template` 分析历史记录。
+
+CLI 等效写法：
+
+```bash
+demaciasportsworldtool run --altitude-base 15          # 基准 15 m，震荡自动
+demaciasportsworldtool run --altitude-base 15 --altitude-osc 3   # 基准 15 m，上下各 3 m
+```
 
 ### 冻结
 
