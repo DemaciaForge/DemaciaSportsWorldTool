@@ -44,14 +44,13 @@ pub const SPEED_FIELD_DROP_KMH: (f64, f64) = (0.9, 2.2);
 
 /// 逐点海拔噪声的标准差（米）。
 ///
-/// **未标定**：手上没有可信的真实跑步高程样本。曾用 `real/obs_*.json` 的
-/// 63–190 m 爬升去反解 σ=1.0，但那 10 条记录全部来自同一次 `--altitude 6-22`
-/// 手动区间覆盖（海拔带一律 6.00–22.00），爬升跨度是区间映射 bug 的放大产物，
-/// 不是真实世界分布，不能作为标定依据。
+/// 标定自 3 条**服务端判定通过**的真实记录（`real_lly/`，status=0 且
+/// appealStatus=0，里程 4 km）：相邻点 `bdA` 差分的标准差 **0.675 / 0.870 /
+/// 0.894**（均值约 0.81），全程海拔带 9.78–11.78 m。
 ///
-/// 暂取保守值：400 m 塑胶跑道是平的，真机融合高程在 2 km 上给出十几米以内的
-/// 累计爬升属正常量级。等有可信样本后再定。
-pub const ALT_STEP_SIGMA_M: f64 = 0.12;
+/// 早前用自己那 10 条记录反解 σ=1.0 是错的——它们全部来自同一次
+/// `--altitude 6-22` 覆盖，海拔带一律 16.00，是 bug 产物，不能作标定依据。
+pub const ALT_STEP_SIGMA_M: f64 = 0.38;
 /// 单趟跑步里跑者离开路线再回来（喝水 / 系鞋带）的概率。
 pub const SIDE_TRIP_P: f64 = 0.10;
 
@@ -461,6 +460,9 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
     // ⑤ 逐点组装坐标（累计量在 ⑥ 里按实测几何统一重算）
     let mut locs: Vec<GenPoint> = Vec::with_capacity(n);
     let alt0 = altitude.base_m;
+    // 本次记录专属的海拔震荡幅度：真人每条记录的海拔跨度都不同（实测 9.78 /
+    // 11.27 / 11.78 m），固定跨度本身就是破绽。
+    let osc_m = altitude.jittered_band(&mut rng);
     let mut side_trip_left = if rng.random() < SIDE_TRIP_P && n > 12 {
         rng.randint(2, 4)
     } else {
@@ -653,7 +655,7 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         let phase = (lap_phase * 2.0 + 0.7 * speeds[i]).sin();
         // 主项按一圈周期（每圈回到同一高度），次项两倍频补细节；峰值约为
         // `oscillation_m` 的 1.0 倍，因此「±3 m」填 3.0 就得到 6 m 的上下跨度。
-        let target_alt = alt0 + altitude.oscillation_m * (0.72 * lap_phase.sin() + 0.28 * phase);
+        let target_alt = alt0 + osc_m * (0.72 * lap_phase.sin() + 0.28 * phase);
         // 高程读数 = 缓慢起伏的目标曲线 + 逐点噪声。回拉系数 0.35 让曲线紧贴目标，
         // 不会自己漂走，因此不需要额外的边界约束。
         alt += 0.35 * (target_alt - alt) + rng.gauss(0.0, ALT_STEP_SIGMA_M);

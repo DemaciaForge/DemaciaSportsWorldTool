@@ -57,9 +57,19 @@ impl PolicyInfo {
         (self.freeze_run_time > 0).then_some(self.freeze_run_time)
     }
 
+    /// 是否顺序跑。
+    ///
+    /// 判定看 **`policy`**，不是 `sequenceRule`：反编译
+    /// `RunStartViewModel.isSequence()` 就是 `return this.mPolicy == 1;`。
+    /// `sequenceRule` / `sequenceStrength` 是另一组字段（服务端实测两者都是 0，
+    /// 而 `policy=1` 的账号界面确实带点位序号）。
+    pub fn is_sequence(&self) -> bool {
+        self.policy == 1
+    }
+
     /// 点位顺序模式的文字描述，供日志直接判断。
     pub fn sequence_mode(&self) -> &'static str {
-        if self.sequence_rule != 0 {
+        if self.is_sequence() {
             "顺序跑（须按点位顺序跑完全部点位）"
         } else {
             "随机点位（不强制顺序）"
@@ -271,18 +281,37 @@ mod freeze_tests {
     #[test]
     fn sequence_rule_is_read_from_run_rule_model() {
         let mut v = base();
-        // 默认缺失 -> 0（随机点位模式）
+        // 默认缺失 -> 0
         assert_eq!(parse_policy_response(&v).unwrap().sequence_rule, 0);
-        assert!(parse_policy_response(&v)
-            .unwrap()
-            .sequence_mode()
-            .contains("随机点位"));
 
         v["runRuleModel"]["sequenceRule"] = json!(1);
         v["runRuleModel"]["sequenceStrength"] = json!(1);
         let p = parse_policy_response(&v).unwrap();
         assert_eq!(p.sequence_rule, 1);
         assert_eq!(p.sequence_strength, 1);
+    }
+
+    /// 顺序跑判定看 `policy`，不是 `sequenceRule`。
+    ///
+    /// 依据：反编译 `RunStartViewModel.isSequence()` 就是 `return mPolicy == 1;`。
+    /// 实测本账号 `policy=1` 且 `sequenceRule=0`，若看后者会误判成随机点位。
+    #[test]
+    fn sequence_mode_follows_policy_not_sequence_rule() {
+        let mut v = base();
+        v["policy"] = json!(0);
+        v["runRuleModel"]["sequenceRule"] = json!(0);
+        assert!(!parse_policy_response(&v).unwrap().is_sequence());
+        assert!(parse_policy_response(&v)
+            .unwrap()
+            .sequence_mode()
+            .contains("随机点位"));
+
+        // policy=1 但 sequenceRule=0 —— 实测就是这种组合
+        let mut v2 = base();
+        v2["policy"] = json!(1);
+        v2["runRuleModel"]["sequenceRule"] = json!(0);
+        let p = parse_policy_response(&v2).unwrap();
+        assert!(p.is_sequence());
         assert!(p.sequence_mode().contains("顺序跑"));
     }
 

@@ -326,6 +326,22 @@ pub fn run_full_flow(
         area.freedom_show_fence,
         area.geo_fences_json.len(),
     ));
+    // 顺序跑学校（policy=1）要求按点位编号依次经过。服务端下发数组不保证有序
+    // （实测缓存顺序是 4、5、2、3、1），必须排回编号顺序再生成轨迹与载荷。
+    let pts: Vec<serde_json::Value> = if pol.is_sequence() {
+        let sorted = points::sorted_by_ordinal(&pts);
+        log(&format!(
+            "√ [points] 顺序跑模式：点位已按编号排序 → {}",
+            sorted
+                .iter()
+                .map(|p| p.get("pointName").and_then(|v| v.as_str()).unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join(" → ")
+        ));
+        sorted
+    } else {
+        pts
+    };
     for p in pts.iter().take(5) {
         log(&format!(
             "  [points] {} BD=({:.6},{:.6}) GCJ=({},{})",
@@ -394,11 +410,16 @@ pub fn run_full_flow(
     // 起跑时刻由调用方给定，恒等于「现在 − 用时」。这里不再加随机偏移，
     // 否则终点会落到未来，与「刚跑完就提交」矛盾。
     let start_ms = params.start_ms;
-    let mut track = if params.track_spec != crate::track::stadium::TrackSpec::Auto {
-        log(&format!(
-            "[track] 使用{}操场模式",
-            params.track_spec.label()
-        ));
+    // 顺序跑学校（policy=1）必须按点位编号依次经过，强制走点位环；
+    // 椭圆拟合只保证路过点位附近，不保证经过次序。
+    let effective_spec = if pol.is_sequence() {
+        log("[track] 顺序跑策略 → 使用点位环（按编号依次经过，不做椭圆拟合）");
+        crate::track::stadium::TrackSpec::Ordered
+    } else {
+        params.track_spec
+    };
+    let mut track = if effective_spec != crate::track::stadium::TrackSpec::Auto {
+        log(&format!("[track] 使用{}操场模式", effective_spec.label()));
         crate::track::generator::build_stadium_with_fences(
             params.dist,
             params.dur,
@@ -406,7 +427,7 @@ pub fn run_full_flow(
             (anchor.latitude, anchor.longitude),
             start_ms,
             &pts_bd,
-            params.track_spec,
+            effective_spec,
             &layout_fences,
             params.altitude_profile,
         )?

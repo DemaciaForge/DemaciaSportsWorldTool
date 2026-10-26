@@ -30,6 +30,7 @@ fn usage() {
   records                                  跑步记录列表
   semester                                 学期完成度
   cheat  [--page n]                        违规自查
+  appeal --rrid <id> [--details]           申诉状态 / 设备取证详情（只读）
   rank   main   --type 1|2|3 --sort 1|2 [--gender 0|1] [--date YYYY-MM-DD]
                                            排行榜（1个人 2班级 3院系；1日 2月）
   rank   indoor --range 1|2|3 [--gender 0|1]

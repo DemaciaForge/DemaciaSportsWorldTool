@@ -340,9 +340,24 @@ pub fn site_ring_with_fences(
     spec: TrackSpec,
     fences: &[Vec<(f64, f64)>],
 ) -> Result<SiteRing, String> {
-    use super::geom::make_point_ring;
+    use super::geom::{make_point_ring, make_point_ring_in_order};
     use super::stadium::make_stadium_ring_with_fences;
 
+    // 顺序跑模式：不拟合椭圆，点位本身就是路线。
+    if spec == TrackSpec::Ordered {
+        if points_bd.len() < 3 {
+            return Err("顺序跑模式需要至少 3 个打卡点才能连成闭合环".into());
+        }
+        let (dense, arcs, center) = make_point_ring_in_order(points_bd);
+        let ring_m = arcs.last().copied().unwrap_or(400.0);
+        return Ok(SiteRing {
+            dense,
+            arcs,
+            center,
+            ring_m,
+            genuine: true,
+        });
+    }
     if spec != TrackSpec::Auto {
         let (dense, arcs, center) = make_stadium_ring_with_fences(points_bd, spec, true, fences)?;
         let ring_m = arcs.last().copied().unwrap_or(400.0);

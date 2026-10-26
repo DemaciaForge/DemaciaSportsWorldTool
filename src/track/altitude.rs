@@ -36,7 +36,32 @@ impl Default for AltitudeProfile {
     }
 }
 
+/// 每条记录的海拔带（最高−最低，米）随机范围。
+///
+/// 标定自 3 条通过审核的真实记录：9.78 / 11.27 / 11.78 m。
+///
+/// **绝不能让每条记录都用同一个跨度**——真人跑步不可能 10 次海拔跨度完全相同。
+/// 早期版本用手动区间 `--altitude 6-22` 覆盖，结果 10 条记录的海拔带全部是
+/// 16.00，这本身就是「APP参数数据异常」的直接证据。
+pub const BAND_RANGE_M: (f64, f64) = (9.2, 12.4);
+
+/// `BAND_RANGE_M` 是**全程海拔带**（最高−最低）。曲线按 `osc/2` 的半幅正弦
+/// 生成，峰峰 = osc，所以半幅要取带宽的 1/2。噪声会再撑大约 15%，因此实际
+/// 取带宽除以 2.2。
+pub const BAND_TO_HALF_AMPLITUDE: f64 = 2.2;
+
 impl AltitudeProfile {
+    /// 按记录种子抖动出一个本次专属的海拔带，返回带边界 (base−/2, base+/2) 的
+    /// 实际幅度。让两次跑步的海拔跨度天然不同。
+    pub fn jittered_band(&self, rng: &mut super::geom::Rng) -> f64 {
+        if self.oscillation_m > 0.0 {
+            // 用户明确了幅度就尊重，但仍加 ±3% 抖动，避免每次都一模一样
+            self.oscillation_m * rng.uniform(0.97, 1.03)
+        } else {
+            rng.uniform(BAND_RANGE_M.0, BAND_RANGE_M.1) / BAND_TO_HALF_AMPLITUDE
+        }
+    }
+
     pub fn validate(self) -> Result<Self, String> {
         if !self.base_m.is_finite() || !(-500.0..=9000.0).contains(&self.base_m) {
             return Err("基准海拔必须是 -500 到 9000 米之间的数字".into());

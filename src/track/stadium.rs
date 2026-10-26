@@ -16,6 +16,13 @@ pub enum TrackSpec {
     M400,
     #[serde(rename = "custom")]
     Custom { total_m: u32 },
+    /// 顺序跑学校（服务端 `policy == 1`）：必须按点位编号 1→2→3→… 依次经过。
+    ///
+    /// 这个模式**不做椭圆拟合**——椭圆只保证路过点位附近，不保证经过次序。
+    /// 这里直接用点位连成 Catmull-Rom 闭合环，轨迹天然按输入顺序走完每一个点。
+    /// 实测本场地 5 个点位首尾相连正好 362.8 m，接近 400 m 一圈。
+    #[serde(rename = "ordered")]
+    Ordered,
 }
 
 impl Default for TrackSpec {
@@ -30,6 +37,7 @@ impl TrackSpec {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Auto => "自动（服务器点位）",
+            Self::Ordered => "顺序跑（按点位编号依次经过）",
             Self::M200 => "200 米标准跑道",
             Self::M300 => "300 米标准跑道",
             Self::M400 => "400 米标准跑道",
@@ -40,6 +48,8 @@ impl TrackSpec {
     fn dimensions(self) -> Option<TrackDimensions> {
         let total_m = match self {
             Self::Auto => return None,
+            // 顺序模式不拟合椭圆：没有标准跑道尺寸可言。
+            Self::Ordered => return None,
             Self::M200 => 200,
             Self::M300 => 300,
             Self::M400 => 400,

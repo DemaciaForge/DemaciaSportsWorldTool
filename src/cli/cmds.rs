@@ -21,6 +21,7 @@ pub fn dispatch(args: Vec<String>) -> i32 {
         "ledger" => cmd_ledger(&rest),
         "semester" => cmd_semester(),
         "cheat" => cmd_cheat(&rest),
+        "appeal" => cmd_appeal(&rest),
         "rank" => cmd_rank(&rest),
         "update" => cmd_update(&rest),
         "help" | "--help" | "-h" => {
@@ -795,6 +796,76 @@ fn cmd_cheat(rest: &[&str]) -> i32 {
             1
         }
     }
+}
+
+/// 申诉状态查询：`appeal --rrid <id> [--details]`。只读。
+fn cmd_appeal(rest: &[&str]) -> i32 {
+    let flags = parse_flags(rest);
+    let Some(rrid) = get(&flags, "rrid") else {
+        eprintln!("用法: appeal --rrid <跑步记录号> [--details]");
+        eprintln!("  --details 同时查设备取证（抓拍照片清单）");
+        return 1;
+    };
+    let mut client = match make_client() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            return 1;
+        }
+    };
+    let mut log = logger();
+    match crate::api::cheat::query_appeal(&mut client, rrid, &mut log) {
+        Ok(info) => {
+            println!("申诉状态 rrid={rrid}");
+            if !info.submitted() {
+                println!("  未提交申诉（appealStatus=null）");
+            } else {
+                println!("  appealStatus  {}", info.appeal_status.unwrap_or_default());
+                println!(
+                    "  复核人        {}",
+                    info.verifier.as_deref().unwrap_or("（无）")
+                );
+                println!(
+                    "  复核意见      {}",
+                    info.verify_info
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
+                        .unwrap_or("（空，可能仍在审核）")
+                );
+                if let Some(ts) = info.verify_time {
+                    println!("  复核时间戳    {ts}");
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("查询申诉失败: {e}");
+            return 1;
+        }
+    }
+    if get(&flags, "details").is_some() {
+        match crate::api::cheat::query_cheat_details(&mut client, rrid, &mut log) {
+            Ok(data) => {
+                let cfg = data.get("config").cloned().unwrap_or_default();
+                println!("\n设备取证 config: {cfg}");
+                if let Some(list) = data.get("list").and_then(|l| l.as_array()) {
+                    if list.is_empty() {
+                        println!("  没有抓拍记录");
+                    }
+                    for (i, item) in list.iter().enumerate() {
+                        println!(
+                            "  {}. {} | {} | {}",
+                            i + 1,
+                            jstr(item, &["shootingTime"]),
+                            jstr(item, &["name"]),
+                            jstr(item, &["imgUrl"]),
+                        );
+                    }
+                }
+            }
+            Err(e) => eprintln!("查询取证详情失败: {e}"),
+        }
+    }
+    0
 }
 
 fn cmd_rank(rest: &[&str]) -> i32 {

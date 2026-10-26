@@ -97,6 +97,54 @@ pub fn make_point_ring(bd_points: &[(f64, f64)]) -> PointRing {
 
 /// 环线弧长 → 坐标（线性插值）。
 #[cfg_attr(not(test), allow(dead_code))] // 跑道按弧长取点，测试在用
+/// 同 [`make_point_ring`]，但**保持输入顺序**不按极角重排。
+///
+/// 顺序跑学校要求按点位编号 1→2→3→… 依次经过，按极角重排会打乱编号。
+/// 前提是调用方已把点位排成沿路线首尾相接的顺序。
+pub fn make_point_ring_in_order(bd_points: &[(f64, f64)]) -> PointRing {
+    let n = bd_points.len();
+    let cx = bd_points.iter().map(|q| q.0).sum::<f64>() / n as f64;
+    let cy = bd_points.iter().map(|q| q.1).sum::<f64>() / n as f64;
+    let mut ordered = bd_points.to_vec();
+    let plane: Vec<(f64, f64)> = ordered
+        .iter()
+        .map(|q| ((q.1 - cy) * MET_PER_DEG_LNG, (q.0 - cx) * MET_PER_DEG_LAT))
+        .collect();
+    let samples = 18usize;
+    let mut dense = Vec::with_capacity(n * samples);
+    for i in 0..n {
+        let p0 = plane[(i + n - 1) % n];
+        let p1 = plane[i];
+        let p2 = plane[(i + 1) % n];
+        let p3 = plane[(i + 2) % n];
+        for j in 0..samples {
+            let t = j as f64 / samples as f64;
+            let (t2, t3) = (t * t, t * t * t);
+            let x = 0.5
+                * ((2.0 * p1.0)
+                    + (-p0.0 + p2.0) * t
+                    + (2.0 * p0.0 - 5.0 * p1.0 + 4.0 * p2.0 - p3.0) * t2
+                    + (-p0.0 + 3.0 * p1.0 - 3.0 * p2.0 + p3.0) * t3);
+            let y = 0.5
+                * ((2.0 * p1.1)
+                    + (-p0.1 + p2.1) * t
+                    + (2.0 * p0.1 - 5.0 * p1.1 + 4.0 * p2.1 - p3.1) * t2
+                    + (-p0.1 + 3.0 * p1.1 - 3.0 * p2.1 + p3.1) * t3);
+            dense.push((x, y));
+        }
+    }
+    let mut arcs = vec![0.0f64];
+    for i in 1..=dense.len() {
+        let a = dense[i - 1];
+        let b = dense[i % dense.len()];
+        arcs.push(arcs[i - 1] + ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt());
+    }
+    (dense, arcs, (cx, cy))
+}
+
+/// 环线弧长 → 坐标（线性插值）。
+#[cfg_attr(not(test), allow(dead_code))] // 跑道按弧长取点，测试在用
+
 pub fn ring_point_at(dense: &[(f64, f64)], arcs: &[f64], s: f64) -> (f64, f64) {
     let total = *arcs.last().unwrap_or(&1.0);
     let s = s.rem_euclid(total);

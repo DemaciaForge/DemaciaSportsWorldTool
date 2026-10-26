@@ -64,3 +64,95 @@ pub fn query(
     ));
     Ok(CheatReport { self_info, list })
 }
+
+// ── 申诉状态 ────────────────────────────────────────────────────────────
+//
+// POST api/v8/runnings/appeal/info  -> AppealInfoBean{ appealStatus, verifier, verifyInfo, verifyTime }
+//   appealStatus 语义（客户端 AppealInfoBean 只有这四个字段，没有枚举常量）：
+//     未见提交状态值为 null —— 说明还没申诉过。
+// POST api/v670/runnings/hardware/antCheating/details -> { config, list:[{ shootingTime, name, imgUrl }] }
+//   设备取证：抓拍照片 + 说明。查询只读。
+
+pub const APPEAL_INFO_PATH: &str = "/api/v8/runnings/appeal/info";
+pub const CHEAT_DETAILS_PATH: &str = "/api/v670/runnings/hardware/antCheating/details";
+
+/// 申诉状态。字段原样保留服务端值，不猜测未确定的枚举含义。
+#[derive(Debug, Clone)]
+pub struct AppealInfo {
+    /// 服务端原值；`None` = 未申诉过。
+    pub appeal_status: Option<i64>,
+    /// 复核人（有名字说明走人工复核）。
+    pub verifier: Option<String>,
+    /// 复核意见。
+    pub verify_info: Option<String>,
+    /// 复核时间（毫秒时间戳）。
+    pub verify_time: Option<i64>,
+}
+
+impl AppealInfo {
+    /// 是否申诉过。
+    pub fn submitted(&self) -> bool {
+        self.appeal_status.is_some()
+    }
+
+    /// 一行摘要。
+    pub fn brief(&self) -> String {
+        let Some(status) = self.appeal_status else {
+            return "未提交申诉".into();
+        };
+        let who = self.verifier.as_deref().filter(|s| !s.trim().is_empty());
+        let info = self.verify_info.as_deref().filter(|s| !s.trim().is_empty());
+        let mut out = format!("appealStatus={status}");
+        if let Some(v) = who {
+            out.push_str(&format!(" 复核人={v}"));
+        }
+        match info {
+            Some(i) => out.push_str(&format!(" 意见={i}")),
+            None => out.push_str(" 意见=（空，可能仍在审核）"),
+        }
+        out
+    }
+}
+
+/// 查询申诉状态。只读，不发任何写请求。
+pub fn query_appeal(
+    client: &mut ApiClient,
+    rrid: &str,
+    log: &mut dyn FnMut(&str),
+) -> Result<AppealInfo, String> {
+    let body = json!({ "rrid": rrid }).to_string();
+    let biz = client.call_host(DISCOVERY, "POST", APPEAL_INFO_PATH, &body, &[])?;
+    let data = super::client::parse_data_field(&biz);
+    let info = AppealInfo {
+        appeal_status: data.get("appealStatus").and_then(|v| v.as_i64()),
+        verifier: data
+            .get("verifier")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        verify_info: data
+            .get("verifyInfo")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        verify_time: data.get("verifyTime").and_then(|v| v.as_i64()),
+    };
+    log(&format!("[appeal] rrid={rrid} {}", info.brief()));
+    Ok(info)
+}
+
+/// 查询一次跑步的设备取证详情（抓拍照片清单）。只读。
+pub fn query_cheat_details(
+    client: &mut ApiClient,
+    rrid: &str,
+    log: &mut dyn FnMut(&str),
+) -> Result<Value, String> {
+    let body = json!({ "rrid": rrid }).to_string();
+    let biz = client.call_host(DISCOVERY, "POST", CHEAT_DETAILS_PATH, &body, &[])?;
+    let data = super::client::parse_data_field(&biz);
+    let n = data
+        .get("list")
+        .and_then(|l| l.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    log(&format!("[cheat-details] rrid={rrid} 取证照片 {n} 条"));
+    Ok(data)
+}

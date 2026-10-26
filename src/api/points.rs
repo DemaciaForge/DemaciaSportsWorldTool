@@ -538,3 +538,34 @@ mod tests {
         );
     }
 }
+
+/// 提取点位名里的数字序号（"点位3" -> 3）。
+///
+/// 服务端下发的点位数组**不保证按序号排列**（实测本地缓存里是 4、5、2、3、1）。
+/// 顺序跑学校要求「按点位顺序跑完所有点位」，所以必须先把点位排回服务端
+/// 编号顺序，再生成轨迹与提交载荷。
+fn point_ordinal(name: &str, index: usize) -> usize {
+    let digits: String = name
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    digits.parse::<usize>().unwrap_or(index + 1)
+}
+
+/// 按点位编号升序排列（稳定排序，序号相同保持原顺序）。
+pub fn sorted_by_ordinal(points: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut out: Vec<(usize, usize, serde_json::Value)> = points
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let name = p.get("pointName").and_then(|v| v.as_str()).unwrap_or("");
+            (point_ordinal(name, i), i, p.clone())
+        })
+        .collect();
+    out.sort_by_key(|(ord, idx, _)| (*ord, *idx));
+    out.into_iter().map(|(_, _, v)| v).collect()
+}
