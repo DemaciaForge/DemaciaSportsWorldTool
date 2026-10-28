@@ -87,18 +87,15 @@ fn cmd_run(rest: &[&str]) -> i32 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.0);
     let pace: f32 = get(&flags, "pace").map(parse_pace).unwrap_or(0.0);
-    let (manual_altitude, manual_altitude_range) = match get(&flags, "altitude") {
-        Some(value) => match crate::track::altitude::parse_spec(value) {
-            Ok(Some(crate::track::altitude::AltitudeSpec::Single(value))) => (Some(value), None),
-            Ok(Some(crate::track::altitude::AltitudeSpec::Range(range))) => (None, Some(range)),
-            Ok(None) => (None, None),
-            Err(e) => {
-                eprintln!("--altitude {e}");
-                return 1;
-            }
-        },
-        None => (None, None),
-    };
+    // 手动海拔已停用：区间形式把每条记录的海拔上下界强制成两个固定整数
+    // （6.00 / 22.00），平地上不可能出现 16 m 摆动，已确认是判 201 的特征。
+    if let Some(value) = get(&flags, "altitude") {
+        eprintln!(
+            "--altitude {value} 手动海拔已停用（会产生固定整数边界的海拔带）。\n             请改用 --altitude-base 指定当地地面高程，海拔震荡会自动抽样。"
+        );
+        return 1;
+    }
+    let (manual_altitude, manual_altitude_range): (Option<f64>, Option<crate::track::altitude::AltitudeRange>) = (None, None);
     let seed: u64 = get(&flags, "seed")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);

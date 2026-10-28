@@ -110,12 +110,6 @@ pub struct AltitudeRange {
     pub max_m: f64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum AltitudeSpec {
-    Single(f64),
-    Range(AltitudeRange),
-}
-
 fn validate_altitude(altitude_m: f64) -> Result<(), String> {
     if !altitude_m.is_finite() || !(-500.0..=9000.0).contains(&altitude_m) {
         return Err("海拔必须是 -500 到 9000 米之间的数字".into());
@@ -133,17 +127,6 @@ fn validate_range(min_m: f64, max_m: f64) -> Result<AltitudeRange, String> {
         return Err("海拔区间跨度不能超过 200 米".into());
     }
     Ok(AltitudeRange { min_m, max_m })
-}
-
-pub fn parse_spec(raw: &str) -> Result<Option<AltitudeSpec>, String> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return Ok(None);
-    }
-    // 已停用：区间形式会把每条记录的海拔最低/最高强制成两个固定整数
-    // （6.00 / 22.00），平地上不可能出现 16 m 摆动，已确认是判 201 的特征。
-    // 固定单值同样把整条记录压成一个高度（带宽 0），也不真实。
-    Err("手动海拔已停用（会产生固定整数边界的海拔带，是判违规的特征）。\n         请改用 --altitude-base 指定当地地面高程，海拔振荡会自动抽样。".into())
 }
 
 pub fn override_bd_a(track: &mut Track, altitude_m: f64) -> Result<(), String> {
@@ -206,16 +189,6 @@ mod tests {
         assert!(override_bd_a(&mut track, 9001.0).is_err());
     }
 
-    /// 手动海拔已停用：任何非空输入都必须报错，
-    /// 否则会产生固定整数边界的海拔带（判 201 特征）。
-    #[test]
-    fn manual_altitude_is_disabled() {
-        assert!(parse_spec("").unwrap().is_none());
-        assert!(parse_spec("   ").unwrap().is_none());
-        assert!(parse_spec("17.2").is_err());
-        assert!(parse_spec("11.6-22.8").is_err());
-        assert!(parse_spec("6-22").is_err());
-    }
 
     #[test]
     fn range_mapping_stays_inside_requested_bounds() {
