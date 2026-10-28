@@ -31,19 +31,25 @@ impl Default for AltitudeProfile {
     fn default() -> Self {
         Self {
             base_m: 82.0,
-            oscillation_m: 1.08,
+            // 0 = 不用固定幅度，改走 `jittered_band` 按记录种子抖动出本次的海拔带。
+            // 原来是 1.08（固定幅度），导致每条记录海拔带都只有 3 m 左右，
+            // 而实测真跑是 5.00-11.78 m。
+            oscillation_m: 0.0,
         }
     }
 }
 
 /// 每条记录的海拔带（最高−最低，米）随机范围。
 ///
-/// 标定自 3 条通过审核的真实记录：9.78 / 11.27 / 11.78 m。
+/// 标定自 5 条确认的真实记录：5.00 / 6.97 / 9.78 / 11.27 / 11.78 m。
+///
+/// 曲线经 0.35 一阶低通后实际带宽约是 osc 的 3.2 倍，所以这里的数值
+/// 是「osc 输入」而不是最终带宽——最终带宽由 `jittered_band` ÷ 2.2 后再衰减得到。
 ///
 /// **绝不能让每条记录都用同一个跨度**——真人跑步不可能 10 次海拔跨度完全相同。
 /// 早期版本用手动区间 `--altitude 6-22` 覆盖，结果 10 条记录的海拔带全部是
 /// 16.00，这本身就是「APP参数数据异常」的直接证据。
-pub const BAND_RANGE_M: (f64, f64) = (9.2, 12.4);
+pub const BAND_RANGE_M: (f64, f64) = (2.2, 10.2);
 
 /// `BAND_RANGE_M` 是**全程海拔带**（最高−最低）。曲线按 `osc/2` 的半幅正弦
 /// 生成，峰峰 = osc，所以半幅要取带宽的 1/2。噪声会再撑大约 15%，因此实际
@@ -110,32 +116,9 @@ pub enum AltitudeSpec {
     Range(AltitudeRange),
 }
 
-pub fn parse_spec(text: &str) -> Result<Option<AltitudeSpec>, String> {
-    let text = text.trim();
-    if text.is_empty() {
-        return Ok(None);
-    }
-    if let Some((left, right)) = text.split_once('-') {
-        let min_m = left
-            .trim()
-            .parse::<f64>()
-            .map_err(|_| "手动海拔区间格式应为 min-max，例如 11.6-22.8".to_string())?;
-        let max_m = right
-            .trim()
-            .parse::<f64>()
-            .map_err(|_| "手动海拔区间格式应为 min-max，例如 11.6-22.8".to_string())?;
-        return Ok(Some(AltitudeSpec::Range(validate_range(min_m, max_m)?)));
-    }
-    let altitude_m = text
-        .parse::<f64>()
-        .map_err(|_| "手动海拔应为数字或 min-max 区间，例如 17.2 或 11.6-22.8".to_string())?;
-    validate_altitude(altitude_m)?;
-    Ok(Some(AltitudeSpec::Single(altitude_m)))
-}
-
 fn validate_altitude(altitude_m: f64) -> Result<(), String> {
     if !altitude_m.is_finite() || !(-500.0..=9000.0).contains(&altitude_m) {
-        return Err("手动海拔必须是 -500 到 9000 米之间的数字".into());
+        return Err("海拔必须是 -500 到 9000 米之间的数字".into());
     }
     Ok(())
 }
@@ -143,16 +126,26 @@ fn validate_altitude(altitude_m: f64) -> Result<(), String> {
 fn validate_range(min_m: f64, max_m: f64) -> Result<AltitudeRange, String> {
     validate_altitude(min_m)?;
     validate_altitude(max_m)?;
-    if min_m > max_m {
-        return Err("手动海拔区间的最小值不能大于最大值".into());
+    if !(max_m > min_m) {
+        return Err("海拔区间的上限必须大于下限".into());
+    }
+    if max_m - min_m > 200.0 {
+        return Err("海拔区间跨度不能超过 200 米".into());
     }
     Ok(AltitudeRange { min_m, max_m })
 }
 
-/// 将轨迹所有点的百度海拔覆盖为用户输入的绝对海拔（米）。
-///
-/// 返回 `Err` 而不是静默接受 NaN/无穷值，避免生成不可序列化或被服务端
-/// 拒绝的提交。海拔范围采用常见地表范围，既能覆盖地下场地也能覆盖高原。
+pub fn parse_spec(raw: &str) -> Result<Option<AltitudeSpec>, String> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    // 已停用：区间形式会把每条记录的海拔最低/最高强制成两个固定整数
+    // （6.00 / 22.00），平地上不可能出现 16 m 摆动，已确认是判 201 的特征。
+    // 固定单值同样把整条记录压成一个高度（带宽 0），也不真实。
+    Err("手动海拔已停用（会产生固定整数边界的海拔带，是判违规的特征）。\n         请改用 --altitude-base 指定当地地面高程，海拔振荡会自动抽样。".into())
+}
+
 pub fn override_bd_a(track: &mut Track, altitude_m: f64) -> Result<(), String> {
     validate_altitude(altitude_m)?;
     for point in &mut track.locations {
@@ -213,20 +206,15 @@ mod tests {
         assert!(override_bd_a(&mut track, 9001.0).is_err());
     }
 
+    /// 手动海拔已停用：任何非空输入都必须报错，
+    /// 否则会产生固定整数边界的海拔带（判 201 特征）。
     #[test]
-    fn parses_single_value_and_range() {
-        assert_eq!(
-            parse_spec("17.2").unwrap(),
-            Some(AltitudeSpec::Single(17.2))
-        );
-        assert_eq!(
-            parse_spec("11.6-22.8").unwrap(),
-            Some(AltitudeSpec::Range(AltitudeRange {
-                min_m: 11.6,
-                max_m: 22.8
-            }))
-        );
-        assert!(parse_spec("22.8-11.6").is_err());
+    fn manual_altitude_is_disabled() {
+        assert!(parse_spec("").unwrap().is_none());
+        assert!(parse_spec("   ").unwrap().is_none());
+        assert!(parse_spec("17.2").is_err());
+        assert!(parse_spec("11.6-22.8").is_err());
+        assert!(parse_spec("6-22").is_err());
     }
 
     #[test]

@@ -559,6 +559,65 @@ pub fn audit(track: &Track) -> AuthenticityReport {
     }
     checks.push(c);
 
+    // 10b 海拔带、边界与拖动（真机签名）
+    //
+    // 实测 5 条确认真跑的记录：海拔带 5.00/6.97/9.78/11.27/11.78 m，
+    // 中位 |Δ海拔| 0.31-0.48 m。而被判 201 的记录全部是 min=6.00 / max=22.00
+    // （带宽恰好 16.00）——平地上 16 m 摆动不可能，且两个边界都是整数。
+    {
+        let alt: Vec<f64> = track.locations.iter().map(|p| p.bdA).collect();
+        let mn = alt.iter().cloned().fold(f64::INFINITY, f64::min);
+        let mx = alt.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let band = mx - mn;
+
+        let c = Check::new(
+            "altitude_band_m",
+            band,
+            "3.0 .. 14.0",
+            (3.0..=14.0).contains(&band),
+        );
+        if !c.pass {
+            failures.push(format!(
+                "海拔带 {band:.2} m 超出真机范围（真跑实测 5.00-11.78 m）"
+            ));
+        }
+        checks.push(c);
+
+        // 两个边界都是整数 = 参数覆盖的产物，自然采集不会这样
+        let near_int = |x: f64| (x - x.round()).abs() <= 0.005;
+        let round_bounds = near_int(mn) && near_int(mx);
+        let c = Check::new(
+            "altitude_round_bounds",
+            if round_bounds { 1.0 } else { 0.0 },
+            "0（边界不得同时为整数）",
+            !round_bounds,
+        );
+        if !c.pass {
+            failures.push(format!(
+                "海拔边界 {mn:.2}/{mx:.2} 同时为整数，是参数覆盖特征"
+            ));
+        }
+        checks.push(c);
+
+        let mut d: Vec<f64> = alt.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+        if !d.is_empty() {
+            d.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let med = d[d.len() / 2];
+            let c = Check::new(
+                "altitude_step_median_m",
+                med,
+                "0.15 .. 0.80",
+                (0.15..=0.80).contains(&med),
+            );
+            if !c.pass {
+                failures.push(format!(
+                    "海拔逐点拖动中位数 {med:.3} m 偏离真机（0.31-0.48）"
+                ));
+            }
+            checks.push(c);
+        }
+    }
+
     // 11 10s / 60s 窗口与总距离守恒
     let win: f64 = track.speedPerTenSec.iter().map(|w| w.value).sum();
     let seg: f64 = track.segments.iter().map(|s| s.distance as f64).sum();

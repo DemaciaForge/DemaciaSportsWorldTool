@@ -197,17 +197,6 @@ impl App {
                 });
             }
             mobile::row(ui, |ui| {
-                ui.label("手动海拔（米/区间）：");
-                mobile::text_edit(
-                    ui,
-                    "run_manual_altitude",
-                    &mut page.manual_altitude,
-                    crate::platform::InputKind::Text,
-                    120.0,
-                );
-                ui.label("留空自动；可填 17.2 或 11.6-22.8");
-            });
-            mobile::row(ui, |ui| {
                 ui.label("基准海拔（米）：");
                 mobile::text_edit(
                     ui,

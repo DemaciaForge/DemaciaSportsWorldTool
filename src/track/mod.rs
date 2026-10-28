@@ -23,7 +23,7 @@ mod tests {
 
     use super::wire::*;
 
-    fn sample_points() -> Vec<(f64, f64)> {
+    pub(super) fn sample_points() -> Vec<(f64, f64)> {
         // 某校园 5 个打卡点（BD 系）
         vec![
             (38.901678, 121.540241),
@@ -393,5 +393,49 @@ mod altitude_calibration_tests {
             (ascent - 7.0).abs() < 1e-9,
             "区间爬升应等于最高减最低，实际 {ascent}"
         );
+    }
+}
+#[cfg(test)]
+mod alt_calibration {
+    use super::generator::build;
+    use super::tests::sample_points;
+
+    /// 海拔曲线必须落在实测真跑区间内：
+    /// 带宽 5.00-11.78 m、中位 |Δ海拔| 0.31-0.48 m。
+    /// 同时边界不能同时是整数（那是参数覆盖特征）。
+    #[test]
+    fn altitude_matches_real_runs() {
+        let pts = sample_points();
+        for seed in 0..8u64 {
+            let tr = build(
+                2000.0,
+                900,
+                seed,
+                (39.4930, 116.2550),
+                1_788_958_186_123,
+                &pts,
+            );
+            let alt: Vec<f64> = tr.locations.iter().map(|p| p.bdA).collect();
+            let mn = alt.iter().cloned().fold(f64::INFINITY, f64::min);
+            let mx = alt.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let band = mx - mn;
+            let mut d: Vec<f64> = alt.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+            d.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let med = d[d.len() / 2];
+
+            assert!(
+                (4.0..=14.0).contains(&band),
+                "seed={seed} 海拔带 {band:.2} m 偏离真跑区间 5.00-11.78"
+            );
+            assert!(
+                (0.18..=0.60).contains(&med),
+                "seed={seed} 中位|Δ海拔| {med:.3} m 偏离真跑 0.31-0.48"
+            );
+            let near_int = |x: f64| (x - x.round()).abs() <= 0.005;
+            assert!(
+                !(near_int(mn) && near_int(mx)),
+                "seed={seed} 海拔边界 {mn:.2}/{mx:.2} 同时为整数"
+            );
+        }
     }
 }

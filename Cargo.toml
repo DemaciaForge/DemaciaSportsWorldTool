@@ -1,6 +1,6 @@
 [package]
 name = "demaciasportsworldtool"
-version = "0.5.6"
+version = "0.5.7"
 edition = "2021"
 description = "DemaciaSportsWorldTool：运动世界校园版协议自动化工具（GUI + CLI）"
 license = "CC-BY-NC-4.0"

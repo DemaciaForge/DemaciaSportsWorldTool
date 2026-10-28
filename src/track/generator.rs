@@ -50,7 +50,13 @@ pub const SPEED_FIELD_DROP_KMH: (f64, f64) = (0.9, 2.2);
 ///
 /// 早前用自己那 10 条记录反解 σ=1.0 是错的——它们全部来自同一次
 /// `--altitude 6-22` 覆盖，海拔带一律 16.00，是 bug 产物，不能作标定依据。
-pub const ALT_STEP_SIGMA_M: f64 = 0.38;
+pub const ALT_STEP_SIGMA_M: f64 = 0.34;
+
+/// 海拔噪声的一阶自相关系数。
+///
+/// 真机 GPS 高程读数在相邻采样间强相关，用白噪声会让每一步都反号，
+/// 把 totalAscent 堆到真实值的 2-3 倍。
+pub const ALT_NOISE_RHO: f64 = 0.82;
 /// 单趟跑步里跑者离开路线再回来（喝水 / 系鞋带）的概率。
 pub const SIDE_TRIP_P: f64 = 0.10;
 
@@ -605,6 +611,7 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
     }
     let mut cum = 0.0f64;
     let mut alt = alt0;
+    let mut alt_noise = 0.0f64;
     for i in 0..n {
         if i >= 2 {
             cum += step_m[i];
@@ -658,7 +665,13 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         let target_alt = alt0 + osc_m * (0.72 * lap_phase.sin() + 0.28 * phase);
         // 高程读数 = 缓慢起伏的目标曲线 + 逐点噪声。回拉系数 0.35 让曲线紧贴目标，
         // 不会自己漂走，因此不需要额外的边界约束。
-        alt += 0.35 * (target_alt - alt) + rng.gauss(0.0, ALT_STEP_SIGMA_M);
+        // 高程噪声用一阶自相关（OU），不是白噪声。
+        // 真机 GPS 高程在相邻两个采样之间是相关的（多径反射、
+        // 卫星几何短时内不变）；白噪声每步都反号，会把
+        // totalAscent 堆到真实值的两三倍（实测真跑 17-19 m/km，
+        // 白噪声模型给出 30+ m/km）。
+        alt_noise = ALT_NOISE_RHO * alt_noise + rng.gauss(0.0, ALT_STEP_SIGMA_M);
+        alt += 0.35 * (target_alt - alt) + alt_noise;
 
         locs[i].bdA = round_to(alt, 2);
         // 航向：本段前进方向 + 抖动
