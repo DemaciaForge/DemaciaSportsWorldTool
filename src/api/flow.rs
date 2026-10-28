@@ -110,16 +110,32 @@ pub fn run_dry_run(params: &RunParams, anchor: Coordinate) -> Result<DryRunSumma
         .collect::<Result<_, String>>()?;
     // 必须把海拔 profile 传进去：否则 dry-run 永远用默认基准高度，
     // 打印出来的海拔与真正提交时不一致，自检就没意义了。
-    let mut track = gen_track_fenced(
-        params.dist,
-        params.dur,
-        params.seed,
-        (anchor.latitude, anchor.longitude),
-        params.start_ms,
-        &point_coords,
-        &[],
-        params.altitude_profile,
-    );
+    // 和真提交一样做距离自洽重试：弧长与弦长差 ~2%，
+    // 单次生成约有 10% 概率超出容差。干跑不重试就会误报失败，
+    // 而真正提交时会重试并成功——两边结论不一致。
+    let mut track = {
+        let mut picked = None;
+        for attempt in 0..5u64 {
+            let seed = params.seed.wrapping_add(attempt * 7919);
+            let candidate = gen_track_fenced(
+                params.dist,
+                params.dur,
+                seed,
+                (anchor.latitude, anchor.longitude),
+                params.start_ms,
+                &point_coords,
+                &[],
+                params.altitude_profile,
+            );
+            let measured = chord_path_len(&candidate);
+            let ratio = measured / candidate.totalDistance.max(1.0);
+            if (ratio - 1.0).abs() <= 0.018 || attempt == 4 {
+                picked = Some(candidate);
+                break;
+            }
+        }
+        picked.ok_or("轨迹生成失败")?
+    };
     if let Some(range) = params.manual_altitude_range {
         crate::track::altitude::override_bd_a_range(&mut track, range)?;
     } else if let Some(altitude_m) = params.manual_altitude {
