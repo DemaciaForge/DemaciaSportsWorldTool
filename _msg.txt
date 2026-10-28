@@ -1,0 +1,26 @@
+release: v0.5.8
+
+v0.5.7 的 tag 打在 59a1499，只包含海拔重新标定；
+后面两个 commit 没进去。补一个版本。
+
+## 相对 v0.5.7 的差异
+
+- 955e9d0 删除 AltitudeSpec / parse_spec 死代码，消除 never-constructed 警告
+- 22bc2dc dry-run 传入海拔 profile，并打印海拔区间与拖动中位数
+
+## 为什么要补
+
+v0.5.7 的 `run --dry-run` 没把 `--altitude-base` 传进生成器，
+打印出来的海拔是默认 82 m 基准的曲线，与真正提交的不一致。
+而 dry-run 正是提交前要看的东西，不一致就没意义。
+
+现在：
+
+    $ demaciasportsworldtool run --dry-run --dist 2.4 --pace 420 --altitude-base 14
+    dry-run 通过：2417m / 1008s / 198 轨迹点 / 2 OBS 键
+      起点 (39.492874, 116.254377)  速度 0.07–3.46 m/s
+      海拔 8.75–17.92 m（带宽 9.17，拖动中位 0.280）
+
+对标实测真跑：海拔 9.40–17.88 m，带宽 5.00–11.78，拖动中位 0.31–0.48。
+
+156 项测试全绿。
