@@ -189,7 +189,6 @@ mod tests {
         assert!(override_bd_a(&mut track, 9001.0).is_err());
     }
 
-
     #[test]
     fn range_mapping_stays_inside_requested_bounds() {
         let mut track = build(1200.0, 600, 7, (38.9, 121.54), 1_700_000_000_000, &points());

@@ -54,6 +54,8 @@ pub struct DryRunSummary {
     pub start_longitude: f64,
     pub min_speed_mps: f64,
     pub max_speed_mps: f64,
+    /// 海拔下界 / 上界 / 带宽 / 逐点拖动中位数（米）。
+    pub altitude: (f64, f64, f64, f64),
     /// 真实性互校结论（逐项读数 + 失败原因）。
     pub realism: crate::track::realism::AuthenticityReport,
 }
@@ -106,13 +108,17 @@ pub fn run_dry_run(params: &RunParams, anchor: Coordinate) -> Result<DryRunSumma
             Ok((lat, lon))
         })
         .collect::<Result<_, String>>()?;
-    let mut track = gen_track(
+    // 必须把海拔 profile 传进去：否则 dry-run 永远用默认基准高度，
+    // 打印出来的海拔与真正提交时不一致，自检就没意义了。
+    let mut track = gen_track_fenced(
         params.dist,
         params.dur,
         params.seed,
         (anchor.latitude, anchor.longitude),
         params.start_ms,
         &point_coords,
+        &[],
+        params.altitude_profile,
     );
     if let Some(range) = params.manual_altitude_range {
         crate::track::altitude::override_bd_a_range(&mut track, range)?;
@@ -171,6 +177,17 @@ pub fn run_dry_run(params: &RunParams, anchor: Coordinate) -> Result<DryRunSumma
             (min.min(speed), max.max(speed))
         });
 
+    let altitude = {
+        let alt: Vec<f64> = track.locations.iter().map(|p| p.bdA).collect();
+        let mn = alt.iter().cloned().fold(f64::INFINITY, f64::min);
+        let mx = alt.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let mut d: Vec<f64> = alt.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+        if !d.is_empty() {
+            d.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        (mn, mx, mx - mn, d.get(d.len() / 2).copied().unwrap_or(0.0))
+    };
+
     Ok(DryRunSummary {
         distance_m: track.totalDistance,
         duration_s: track.totalTime,
@@ -180,6 +197,7 @@ pub fn run_dry_run(params: &RunParams, anchor: Coordinate) -> Result<DryRunSumma
         start_longitude: track.startLongitude,
         min_speed_mps,
         max_speed_mps,
+        altitude,
         realism,
     })
 }
@@ -481,6 +499,23 @@ pub fn run_full_flow(
             altitude_m,
             track.locations.len()
         ));
+    }
+    // 海拔形态直接打出来：它是判 201 的疑似特征，提交前必须能看到。
+    {
+        let alt: Vec<f64> = track.locations.iter().map(|p| p.bdA).collect();
+        if !alt.is_empty() {
+            let mn = alt.iter().cloned().fold(f64::INFINITY, f64::min);
+            let mx = alt.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let mut d: Vec<f64> = alt.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+            if !d.is_empty() {
+                d.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            }
+            let med = d.get(d.len() / 2).copied().unwrap_or(0.0);
+            log(&format!(
+                "√ [track] 海拔 {mn:.2}-{mx:.2} m（带宽 {:.2}，拖动中位 {med:.3}）",
+                mx - mn
+            ));
+        }
     }
     log(&format!(
         "√ [track] {} 点 totalDis={:.0}m steps={} 起点={}",

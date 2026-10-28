@@ -95,7 +95,10 @@ fn cmd_run(rest: &[&str]) -> i32 {
         );
         return 1;
     }
-    let (manual_altitude, manual_altitude_range): (Option<f64>, Option<crate::track::altitude::AltitudeRange>) = (None, None);
+    let (manual_altitude, manual_altitude_range): (
+        Option<f64>,
+        Option<crate::track::altitude::AltitudeRange>,
+    ) = (None, None);
     let seed: u64 = get(&flags, "seed")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
@@ -261,7 +264,7 @@ fn cmd_run(rest: &[&str]) -> i32 {
         return match crate::api::flow::run_dry_run(&params, anchor) {
             Ok(s) => {
                 println!(
-                    "dry-run 通过：{:.0}m / {}s / {} 轨迹点 / {} OBS 键\n  起点 ({:.6}, {:.6})  速度 {:.2}–{:.2} m/s",
+                    "dry-run 通过：{:.0}m / {}s / {} 轨迹点 / {} OBS 键\n  起点 ({:.6}, {:.6})  速度 {:.2}–{:.2} m/s\n  海拔 {:.2}–{:.2} m（带宽 {:.2}，拖动中位 {:.3}）",
                     s.distance_m,
                     s.duration_s,
                     s.track_points,
@@ -269,7 +272,11 @@ fn cmd_run(rest: &[&str]) -> i32 {
                     s.start_latitude,
                     s.start_longitude,
                     s.min_speed_mps,
-                    s.max_speed_mps
+                    s.max_speed_mps,
+                    s.altitude.0,
+                    s.altitude.1,
+                    s.altitude.2,
+                    s.altitude.3
                 );
                 0
             }
