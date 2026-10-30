@@ -146,7 +146,8 @@ pub fn run_dry_run(params: &RunParams, anchor: Coordinate) -> Result<DryRunSumma
     validate_five_point_wrapper(&five)?;
     let obj = build_obs_object(&track, 0, "dry-run", 0, &live_points);
     let keys = obs_keys(&track, 0, "dry-run");
-    if keys.len() != 2 {
+    // 真机只写 1 个 key（日期式）；多写的那一个 App 从不读，是多余的痕迹。
+    if keys.len() != 1 {
         return Err(format!("dry-run OBS key 数量异常: {}", keys.len()));
     }
     for key in [
@@ -628,11 +629,12 @@ pub fn run_full_flow(
     );
     let payload = obj.to_string().into_bytes();
     let keys = obs_keys(&track_for_obs, result.rrid, &result.uuid);
+    let want = keys.len();
     let obs_ok = super::obs::upload_both_keys(client, &keys, &payload, log);
-    if obs_ok == 2 {
-        log("√ [obs] 双 key 上传成功");
+    if obs_ok == want {
+        log(&format!("√ [obs] 上传成功（{want} 个 key）"));
     } else {
-        log(&format!("⚠ [obs] 上传成功 {obs_ok}/2"));
+        log(&format!("⚠ [obs] 上传成功 {obs_ok}/{want}"));
     }
     // 回填 OBS 结果；失败只记日志，台账里 rrid 已经在上面落盘了。
     if let Err(e) = crate::ledger::set_obs_ok(result.rrid, obs_ok) {
@@ -644,10 +646,15 @@ pub fn run_full_flow(
     log("[verify] 拉取详情验证…");
     let detail_ok = match fetch_one_record(client, result.rrid) {
         Ok(d) => {
+            let complete = d.get("complete").and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_cheat = d
+                .get("isCheat")
+                .and_then(|v| v.as_i64().or_else(|| v.as_bool().map(i64::from)))
+                .unwrap_or(0);
             log(&format!(
-                "√ [verify] rrid={} complete={:?} dis={:?} time={:?}",
+                "√ [verify] rrid={} 结论={} dis={:?} time={:?}",
                 result.rrid,
-                d.get("complete").and_then(|v| v.as_bool()),
+                crate::track::rules::Verdict::from_fields(complete, is_cheat).label(),
                 d.get("totalDis"),
                 d.get("totalTime"),
             ));
@@ -694,7 +701,7 @@ mod tests {
     fn dry_run_builds_and_validates_protocol_payloads() {
         let summary = run_dry_run(&params(), Coordinate::new(39.9, 116.4, 0.0).unwrap()).unwrap();
         assert_eq!(summary.duration_s, 800);
-        assert_eq!(summary.obs_keys, 2);
+        assert_eq!(summary.obs_keys, 1);
         assert!(summary.track_points > 10);
         // 声明距离取自实测位移，允许 ±3% 的真实几何偏差
         assert!(

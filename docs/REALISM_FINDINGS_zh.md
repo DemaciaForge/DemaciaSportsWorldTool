@@ -245,3 +245,76 @@ K–R 落地后，另外满足：
 | `status == 1` 判达标 | 对端实测推翻：8 条正常记录 `status` 全为 0 而 `complete` 全为 true |
 | 单校区配速区间（4′00″–10′00″） | 各校配置不同，写死会误判 |
 
+---
+
+## 6. 极验 GeeGuard（geeToken）的实际行为（2026-10-30）
+
+逆向对象：`com.geetest.core`（GeeGuard **2.7.4**）、`com.geetest.deepknow`、
+`libgtcore.so` / `libdeepknow-lib.so`（arm64-v8a）。
+证据等级：**强**（逐行代码路径，可直接复现）。
+
+### 6.1 上报链路
+
+```
+App：DeepKnowUtils.OooO0OO(cb)          提交记录前，要 token
+  → DeepKnowUtils$emitSenseData$2.invokeSuspend()
+     → GeeGuard.submitReceipt(ctx, null, cb)      ← 第二参数是 null
+        → x3.b(ctx, null, 5000, cb) → s3.a(ctx, appID, sig, 5000, url, cb)
+           → Core.getData(ctx, config)              ← native，生成载荷
+           → POST https://riskct.geetest.com/g2/api/v1/client_report
+              headers: API-Version, AppID, GeeID, Client-Type
+              body:    Core.getData() 的返回值
+           → 响应 data.gee_token → respondedGeeToken
+```
+
+`GeeID` 来自 `SharedPreferences("gt_core")` 的 `gt_gid3`，四段式、第二段是时间戳
+（`s3.java:16-26`），设备维度持久化。
+
+### 6.2 三个常见误解都被代码推翻
+
+| 误解 | 代码事实 |
+|---|---|
+| “每次过点位会上报 geeToken” | 发的是**请求**，拿回的 token **被丢弃**——`emitSenseData$1:32-34` 的回调是空方法体 |
+| “上报的时间戳是服务器算的” | `deepknow/f.java:51,62` 用 `System.currentTimeMillis()`，**本地时钟** |
+| “业务 payload 会被上传” | `submitReceipt` 的第二参数**不进 POST body**；body 只是 `Core.getData()` 的输出（`s3.java:60` + `c6.java:35-37`） |
+
+### 6.3 两条路径的实际区别
+
+| App 调用 | 第三参 | 回调 | 返回字段 | 是否被使用 |
+|---|---|---|---|---|
+| `OooO0OO(cb)`（提交记录前） | 无 | 有，真实使用 | `respondedGeeToken` | **是**，写入提交体 |
+| `OooO0O0(scene, uid, uuid)`（过点位 / 结束） | uuid | **空方法体** | 丢弃 | **否** |
+
+`RunSequencePImpl:163`（过点位）、`RunRandomPImpl:271`、`RunEndPImpl:65`、
+`RunFreePImpl:298` 均走第二行；只有提交前那次走第一行。
+
+### 6.4 对判罚归因的意义
+
+**`geeToken` 只取决于设备与 AppID，与轨迹数据无关。**
+
+因此：
+
+- 不存在“轨迹异常导致 geeToken 不对”的因果链；
+- 判罚文案为 `APP参数数据异常`的记录，依据只能在**载荷数值字段**；
+- 风控层（极验）与业务判罚层是两套东西，后者对应的文案是
+  `APP运行环境数据异常`。
+
+### 6.5 为什么不去补 geeToken（一个硬约束）
+
+| 做法 | 结果 |
+|---|---|
+| 抓包复用 receipt | `geeIDTimestamp` 有时效，且绑定 `uuid` / `app_id` / `session_id` |
+| 真机跑 SDK | 可行，但那就是直接用 App，无意义 |
+| 逆向 native 自签 | `libgtcore.so` 为 OLLVM 平坦化 + **58 个 `.datadiv_decode` 加密函数**，白盒加密 |
+| PC 上自建载荷 | 载荷内容就是 PC 特征，极验的存在意义就是识别这个 |
+
+`libgtcore.so` 静态观测（Ghidra，759 函数，`.text` 1.04 MB）：
+`.init_array` 58 项全为 `R_AARCH64_ABS64` + `addend=0`，
+对应 58 个 `.datadiv_decode<20位数>式` 函数名；`JNI_OnLoad` 为状态机扁平化。
+
+### 6.6 本节能与不能保证的
+
+- **能**：上报路径、字段来源、两条调用线的区别、时间戳归属。
+- **不能**：`Core.getData()` 内部采集了什么（白盒）；
+  `addSignature(payload)` 在 native 里是否上传。此处不确定：只能确定
+  它**不在 HTTP body 里**，无法排除 native 将其写入其他字段。
