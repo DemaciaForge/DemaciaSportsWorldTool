@@ -495,3 +495,81 @@ mod count_calibration {
         );
     }
 }
+
+#[cfg(test)]
+mod time_calibration {
+    use super::generator::build;
+    use super::tests::sample_points;
+
+    fn features(seed: u64) -> (i64, i64, usize) {
+        let pts = sample_points();
+        let tr = build(
+            2400.0,
+            1008,
+            seed,
+            (39.4930, 116.2550),
+            1_788_958_186_123,
+            &pts,
+        );
+        let raw: Vec<i64> = tr.locations.iter().map(|p| p.gainTimeMs).collect();
+        let g: Vec<i64> = raw.iter().map(|x| x / 1000).collect();
+        let tt = &tr.locations;
+        let d2 = g[1] - g[0];
+        let span = g[g.len() - 1] - g[0];
+        let tail = span - tt[tt.len() - 1].totalTime;
+        let neg = raw.windows(2).filter(|w| w[1] < w[0]).count();
+        (d2, tail, neg)
+    }
+
+    /// 真跑时间轴的三个粗糙感必须都存在。
+    ///
+    /// 标定（9 条确认真跑 vs 16 条被判「APP参数数据异常」）：
+    ///
+    /// | 特征 | 真跑 | 被判 |
+    /// |---|---|---|
+    /// | 第2点相邻差 | -5 ~ +18 s（8/9 为负）| **恒为 +5** |
+    /// | 钟跨 − totalTime | **+3 ~ +996 s**（9/9 为正）| **恒为 -5** |
+    /// | 中途回退 | 8/9 有 | **0/16** |
+    ///
+    /// 旧实现三个特征全部完美闭合（+5 / −5 / 0），本身就是机器指纹：
+    /// 真机的 gainTime 来自 GPS 硬件回调，不可能与数学序列严格对齐。
+    #[test]
+    fn gain_time_has_device_roughness() {
+        let mut neg_second = 0usize;
+        let mut positive_tail = 0usize;
+        let mut with_regress = 0usize;
+        const N: u64 = 12;
+        for seed in 0..N {
+            let (d2, tail, neg) = features(seed);
+            assert!(
+                d2 <= 18 && d2 >= -10,
+                "seed={seed}: 第2点差 {d2}s 超出真跑范围 -5~+18"
+            );
+            assert!(
+                (3..=1200).contains(&tail),
+                "seed={seed}: 钟跨−时长 {tail}s 必须为正（真跑 +3~+996）"
+            );
+            if d2 <= 0 {
+                neg_second += 1;
+            }
+            if tail > 0 {
+                positive_tail += 1;
+            }
+            if neg > 0 {
+                with_regress += 1;
+            }
+        }
+        assert!(
+            neg_second * 2 >= N as usize,
+            "{N} 个种子里只有 {neg_second} 个第2点为负，真跑是 8/9"
+        );
+        assert_eq!(positive_tail, N as usize, "钟跨−时长必须全为正");
+        eprintln!(
+            "STATS neg_second={neg_second} tail={positive_tail} regress={with_regress} of {N}"
+        );
+        assert!(
+            with_regress * 2 >= N as usize,
+            "{N} 个种子里只有 {with_regress} 个有回退，真跑是 8/9"
+        );
+    }
+}

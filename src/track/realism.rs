@@ -907,14 +907,28 @@ impl LaneTracker {
 /// 旧实现只有 80% 落在 5 秒，其余在 1/2/3/4/6/7/8 秒里随机抖——服务端看
 /// 逐点 `totalTime` 就是「采样不规律」，与真机的定位回调节奏对不上。
 pub fn sample_grid(dur_s: f64, rng: &mut Rng) -> (Vec<f64>, Vec<f64>) {
+    // ── 真机时间轴的三个粗糙感（标定自 9 条确认真跑记录）──
+    //
+    // 真机的 `gainTime` 来自 GPS 回调，**不是**从 startTime 精确递推出来的。
+    // 实测 9 条真跑（已确认均为真跑）：
+    //
+    //   首点比 startTime 提前  2～5 s
+    //   第 2 点 相邻差        负或 0（8/9 为负）—— 设备还没稳定
+    //   钟跨 − 运动时长        **+3 ～ +996 s**（9/9 全为正）
+    //   中途回退             8/9 有至少一次
+    //
+    // 对照：旧实现把 `gainTime` 写成 `start_ms + times[i]*1000`，
+    // 而 `totalTime = times[i].round()`，两者**严格相等**：
+    //   第 2 点差恒为 +5、钟跨−时长恒为 0、永不回退。
+    // 16 条被判「APP参数数据异常」的记录全部长这个样子。
+    // 时刻从 0 开始。**首点/次点的真实偏差不在这里做**，而是在 `gainTime` 字段上
+    // 叠加（见 `generator.rs` 的 `gain_shift_ms`）。原因：`times` 是位移分摊的时长
+    // 基准，必须单调非负；`gainTime` 是 GPS 回调时刻，可以与它不同步。
     let mut times = Vec::new();
     let mut t = 0.0;
     let mut prev_gap = 5.0f64;
-    // 第一拍不能丢：开跑那一刻一定有定位，否则首个 10 s 窗口只剩几米。
     times.push(0.0);
     t += 5.0;
-    // 前两拍都不能丢：首点与起点哨兵同在 t=0，
-    // 真正上路的第一个采样点是 times[2]，它也必须是 5 s。
     times.push(t);
     t += 5.0;
     while t < dur_s - 1.0 {
@@ -956,6 +970,10 @@ pub fn sample_grid(dur_s: f64, rng: &mut Rng) -> (Vec<f64>, Vec<f64>) {
     let n = times.len();
     // `dts[i]` = 「从 i-1 到 i」的时长，因此 `dts[0] = 0`（首点没有前驱）。
     let mut dts: Vec<f64> = vec![0.0];
+    // `dts` 只用于位移分摊，必须为正；第 2 点的负偏差只保留在
+    // `times`（即 gainTime）里，不参与距离计算。
+    // 两者分离是真机的真实情形：gainTime 是 GPS 回调时刻，
+    // 位移是两次回调之间的真实移动，二者不必同步。
     dts.extend((1..n).map(|i| (times[i] - times[i - 1]).clamp(1.0, MAX_SAMPLE_GAP_S)));
     (times, dts)
 }

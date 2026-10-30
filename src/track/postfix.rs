@@ -30,8 +30,16 @@ pub fn apply_post_fixes(locs: &mut [GenPoint], rng: &mut Rng, start_ms: i64) {
         locs[last].avgSpeed = round_to(stop_speed, 4);
         locs[last].bdS = round_to(rng.uniform(0.05, 0.15), 3);
         locs[last].validTime = locs[last].totalTime;
-        locs[last].gainTime = fmt_gain_time(start_ms + locs[last].totalTime * 1000);
-        locs[last].gainTimeMs = start_ms + locs[last].totalTime * 1000;
+        // 不要把末点 gainTime 重写成严格等于 totalTime。
+        //
+        // 真机的「钟跨 − totalTime」实测为 +3 ～ +996 s（9 条真跑全为正）：
+        // 按下结束后 App 仍在接收几拍定位，这几拍不计入 totalTime。
+        // 这里保留生成器已经算好的偏移；只在它为 0（生成器没加）时才补一个正拖尾。
+        if locs[last].gainTimeMs <= start_ms + locs[last].totalTime * 1000 {
+            let tail = start_ms + locs[last].totalTime * 1000 + rng.uniform(3000.0, 90000.0) as i64;
+            locs[last].gainTime = fmt_gain_time(tail);
+            locs[last].gainTimeMs = tail;
+        }
     }
 
     if locs.len() > 2 {

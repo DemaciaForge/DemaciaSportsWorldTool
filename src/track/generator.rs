@@ -439,6 +439,36 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         .collect();
 
     // ② 形态：进场段 + 绕圈 + 离场段（跑道语义下全程都在路线上）
+    // ── gainTime 偏移：三个独立的真机粗糙感 ──
+    //
+    // 真机实测（9 条确认真跑 + 16 条被判「APP参数数据异常」对照）：
+    //
+    // | 特征 | 真跑 9 条 | 被判 16 条 |
+    // |---|---|---|
+    // | 第2点相邻差 | -5 ~ +18 s | **恒为 +5** |
+    // | 钟跨 − totalTime | **+3 ~ +996 s** | **恒为 -5** |
+    // | 中途回退 | 8/9 有 | **0/16** |
+    //
+    // 旧实现把 gainTime 写成 start_ms + totalTime*1000，两者严格相等，
+    // 于是三个特征全部完美闭合——那本身就是机器指纹。
+    let head_shift: i64 = -rng.uniform(2000.0, 5000.0) as i64;
+    let tail_shift: i64 = rng.uniform(3000.0, 90000.0) as i64;
+    // 第2点目标差：真跑 -5 ～ +2 秒（实测 9 条里 8 条为负）
+    let gap2_ms: i64 = rng.uniform(-5000.0, 2000.0) as i64;
+    // 中途回退点：真跑 9 条里 8 条至少有一次
+    // （定位突变、GPS 校时回调）。位置取 20%~80%，幅度 1~5 s。
+    let lo = 2usize;
+    let hi = n.saturating_sub(2);
+    let regress_at: usize = if hi > lo {
+        lo + ((hi - lo) as f64 * rng.uniform(0.15, 0.85)) as usize
+    } else {
+        lo
+    };
+    // 幅度必须 > 一拍（5 s = 5000 ms），否则 gainTime 仍在前进，看不出回退。
+    // 真跑实测：回退幅度 -1 ~ -5 s 是指**净变化**，而拍间隔本身可能短于 5 s，
+    // 所以这里取 6000 ~ 11000 ms，抠除一拍后净回退 1~6 s。
+    let regress_ms: i64 = -rng.uniform(6000.0, 11000.0) as i64;
+    let has_regress = rng.random() < 0.92;
     let mut plan =
         ShapedPlan::with_access(dist, dur_s, ring.ring_m, &mut rng, !start_at_ring_origin);
     // `loop_m` 必须等于「实际要跑的距离」：形态参数按周长估的圈数在这里没意义
@@ -572,8 +602,32 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
             validTime: times[i].round() as i64,
             steps: 0,
             stepDistance: 0.0,
-            gainTime: fmt_gain_time(start_ms + (times[i] * 1000.0) as i64),
-            gainTimeMs: start_ms + (times[i] * 1000.0) as i64,
+            // `gainTime` 是 GPS 回调时刻，与 `totalTime`（有效运动秒数）
+            // **不同步**。偏移量由 `gain_shift_ms(i, n, head, tail)` 给出：
+            //
+            //   首点     -2000 ~ -5000 ms（设备在 startTime 之前已回调）
+            //   第 2 点   叠加 -500 ~ -5000 ms（刚启动，定位未稳）
+            //   末点     +3000 ~ +90000 ms（停表拖尾，不计入 totalTime）
+            //
+            // 实测 9 条真跑：第2点差 -5~+18 s；钟跨−时长 +3~+996 s。
+            gainTime: fmt_gain_time(
+                start_ms
+                    + (times[i] * 1000.0) as i64
+                    + gain_shift_ms2(i, n, head_shift, tail_shift, gap2_ms)
+                    + if has_regress && i == regress_at {
+                        regress_ms
+                    } else {
+                        0
+                    },
+            ),
+            gainTimeMs: start_ms
+                + (times[i] * 1000.0) as i64
+                + gain_shift_ms2(i, n, head_shift, tail_shift, gap2_ms)
+                + if has_regress && i == regress_at {
+                    regress_ms
+                } else {
+                    0
+                },
             queueNum: 0,
             coorType: "gcj02".into(),
             bdA: round_to(alt0, 2),
@@ -1119,4 +1173,39 @@ mod tests {
             }
         }
     }
+}
+
+/// `gainTime` 相对 `start_ms + totalTime*1000` 的偏移（毫秒）。
+///
+/// 真机的这三个偏移都不为零，且方向固定：
+///
+/// - 首点提前：设备在记录起点前已经开始回调
+/// - 第 2 点再提前：刚启动时定位未稳，两次回调挤在一拍内
+/// - 末点推后：按下结束后 App 仍在接收几拍，这几拍不计入 totalTime
+pub(crate) fn gain_shift_ms(i: usize, n: usize, head: i64, tail: i64) -> i64 {
+    gain_shift_ms2(i, n, head, tail, 0)
+}
+
+/// 带第2点目标差的完整版本（单位毫秒）。
+pub(crate) fn gain_shift_ms2(i: usize, n: usize, head: i64, tail: i64, gap2_ms: i64) -> i64 {
+    if n == 0 {
+        return 0;
+    }
+    if i == 0 {
+        return head;
+    }
+    if i == 1 {
+        // 目标差 = 5000 + shift1 - head  =>  shift1 = 目标差 - 5000 + head
+        let _ = gap2_ms;
+        // 第 2 点的目标相邻差直接按真机分布抽，而不是在 head 上叠加。
+        //
+        // 第2点差 = (5*1000 + shift1) - (0 + shift0) = 5000 + shift1 - head
+        // 所以 shift1 = target_gap_ms - 5000 + head。
+        //
+        return gap2_ms - 5000 + head;
+    }
+    if i == n - 1 {
+        return tail;
+    }
+    0
 }
