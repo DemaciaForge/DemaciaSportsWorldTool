@@ -46,3 +46,6 @@ out.txt
 /lrf_obs
 /zx_obs
 /capture
+
+# 临时提交信展开文件（git commit -F 用，不应入库）
+_*.txt
