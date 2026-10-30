@@ -284,25 +284,21 @@ mod tests {
         assert_eq!(wrap["useZip"], false);
         let pts: Vec<serde_json::Value> =
             serde_json::from_str(wrap["allLocJson"].as_str().unwrap()).unwrap();
-        // 官方点结构里 `accuracy` / `hasAltitude` / `steps` / `stepDistance` 都在，
-        // 少一个就是"这份记录不是这个 App 记的"。
-        assert_eq!(pts[0].as_object().unwrap().len(), 30, "点键数必须 30");
-        for k in [
-            "accuracy",
-            "hasAltitude",
-            "steps",
-            "stepDistance",
-            "coorType",
-            "validTime",
-        ] {
+        // 真机点结构只有 27 个字段（实测 3 条记录、1039 个点）。
+        // 多发 `accuracy` / `hasAltitude` / `steps` 会被 schema 白名单挑出来。
+        assert_eq!(pts[0].as_object().unwrap().len(), 27, "点键数必须 27");
+        for k in ["stepDistance", "coorType", "validTime"] {
             assert!(pts[0].get(k).is_some(), "点必须带 {k}");
         }
-        // `stepDistance` 是累计量：真人跑完全程，计步器不可能一米都没记。
+        // 这三个字段真机没有，我们也不得发。
+        for extra in ["accuracy", "hasAltitude", "steps"] {
+            assert!(pts[0].get(extra).is_none(), "点结构不应包含 {extra}");
+        }
+        // `stepDistance` 真机恒为 0（实测 1039/1039 个点）。
         let last_sd = pts.last().unwrap()["stepDistance"].as_f64().unwrap();
         assert!(
-            last_sd > 0.9 * track.totalDistance,
-            "末点 stepDistance {last_sd:.0} 应接近总距离 {:.0}",
-            track.totalDistance
+            last_sd.abs() < 1e-9,
+            "末点 stepDistance 应为 0，实际 {last_sd}"
         );
         // segment_json 是空串 gzip
         let raw =

@@ -8,7 +8,6 @@ use super::policy::fetch_policy;
 use super::records::fetch_one_record;
 use super::submit::{submit_record, SubmitParams, SubmitResult};
 use crate::location::Coordinate;
-use crate::track::generator::build as gen_track;
 use crate::track::generator::build_with_fences as gen_track_fenced;
 use crate::track::wire::{
     build_obs_object, build_obs_object_with_area, five_point_wrapper, five_point_wrapper_with_area,

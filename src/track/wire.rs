@@ -136,12 +136,15 @@ pub fn ten_second_spans(track: &Track) -> Vec<TenSecondSpan> {
 
 /// 协议点集（gen 点 → OBS 点；gLat/gLng 由 BD 转 GCJ）。
 ///
-/// 字段与官方 payload 对齐：`accuracy`/`hasAltitude`/`steps`/`stepDistance`
-/// 都在官方点结构里，缺一个就是"这份记录不是这个 App 记的"。
+/// 字段与官方 payload **逐项对齐**。
+///
+/// 真机实测（3 条确认真跑记录、1039 个定位点）的点结构只有 27 个字段。
+/// 之前我们多发了 `accuracy` / `hasAltitude` / `steps` 三个，
+/// 而 `stepDistance` 真机**全部为 0**——多出的字段比字段值不对
+/// 更容易被 schema 白名单挑出来。
 pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
     let (glat, glng) = bd09_to_gcj02(p.gLat, p.gLng);
     json!({
-        "accuracy": round_to(p.accuracy, 2),
         "avgSpeed": round_to(p.avgSpeed, 4),
         "bdA": round_to(p.bdA, 2),
         "bdD": round_to(p.bdD, 2),
@@ -154,7 +157,6 @@ pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
         "gLat": round_to(glat, 7),
         "gLng": round_to(glng, 7),
         "gainTime": p.gainTime,
-        "hasAltitude": p.hasAltitude,
         "id": p.id,
         "lat": -1.0,
         "lng": -1.0,
@@ -164,8 +166,9 @@ pub fn conv_point(p: &GenPoint, start_ms: i64) -> Value {
         "radius": round_to(p.radius, 2),
         "speed": round_to(p.speed, 4),
         "state": p.state,
-        "stepDistance": round_to(p.stepDistance, 4),
-        "steps": p.steps,
+        // 真机这个字段恒为 0.0（实测 1039/1039 个点）。原先按“累计量”填了
+        // 非零值，但真机从不启用它，填非零反而是差异。
+        "stepDistance": 0.0,
         "totalDis": round_to(p.totalDis, 4),
         "totalTime": p.totalTime,
         "type": p.ptype,
@@ -545,13 +548,18 @@ mod validation_tests {
                 zfrac * 100.0
             );
 
-            // 2) stepDistance 是累计步幅距离，末点必须接近总距离。
+            // 2) stepDistance 真机恒为 0.0（实测 1039/1039 个点），
+            //    我们也必须填 0；填累计值反而是差异。
             let last_sd = pts[n - 1]["stepDistance"].as_f64().unwrap();
             assert!(
-                last_sd > 0.9 * track.totalDistance && last_sd < 1.1 * track.totalDistance,
-                "seed={seed}: 末点 stepDistance {last_sd:.0} vs 总距离 {:.0}",
-                track.totalDistance
+                last_sd.abs() < 1e-9,
+                "seed={seed}: stepDistance 应为 0，实际 {last_sd}"
             );
+
+            // 2b) 点字段数必须与真机一致（27 个）。
+            //     多字段比值不对更容易被 schema 白名单挑出来。
+            let n_keys = pts[n - 1].as_object().unwrap().len();
+            assert_eq!(n_keys, 27, "点字段数 {n_keys} 与真机 27 不一致");
 
             // 3) speed 与位移/时间差的比值：中位数接近 1，但分布必须明显散开
             //    （真机实测 0.64–1.26）。清一色 1.00 就是机器特征。

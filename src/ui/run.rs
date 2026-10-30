@@ -14,8 +14,6 @@ pub struct RunPage {
     pub dist_max: f32,
     pub pace_min: f32,
     pub pace_max: f32,
-    /// 手动绝对海拔（米）；空白表示使用生成器默认海拔。
-    pub manual_altitude: String,
     pub face_check: bool,
     /// 预计算方案：参数变更时重抽样，提交直接使用
     pub plan: Option<RunPlan>,

@@ -341,11 +341,6 @@ impl App {
                 dist_max: config.dist_max,
                 pace_min: config.pace_min,
                 pace_max: config.pace_max,
-                manual_altitude: config
-                    .manual_altitude_range
-                    .map(|r| format!("{}-{}", r.min_m, r.max_m))
-                    .or_else(|| config.manual_altitude.map(|v| v.to_string()))
-                    .unwrap_or_default(),
                 face_check: config.face_check,
                 plan: None,
                 track_spec: config.track_spec,
