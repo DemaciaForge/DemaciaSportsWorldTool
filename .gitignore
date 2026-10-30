@@ -44,3 +44,5 @@ real/
 out.txt
 /.local/
 /lrf_obs
+/zx_obs
+/capture
