@@ -85,8 +85,13 @@ pub fn login(
             })
             .to_string();
             let url = format!("{HOST}{GEEVALIDATE_PATH}");
-            let out =
-                client.envelope_request("POST", &url, &body, crate::crypto::header::UA_IOS, &[])?;
+            let out = client.envelope_request(
+                "POST",
+                &url,
+                &body,
+                &crate::crypto::header::ua_ios_for(&client.identity),
+                &[],
+            )?;
             let gv_err = out
                 .decrypted
                 .as_ref()
@@ -140,7 +145,7 @@ pub fn login(
         "POST",
         &url,
         &login_body,
-        crate::crypto::header::UA_IOS,
+        &crate::crypto::header::ua_ios_for(&client.identity),
         &extra,
     )?;
     let dec = out

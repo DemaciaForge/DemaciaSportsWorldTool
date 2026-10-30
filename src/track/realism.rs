@@ -729,6 +729,58 @@ pub fn audit(track: &Track) -> AuthenticityReport {
     }
     checks.push(c);
 
+    // 23 服务端点位评分预演（只用与 w3 无关的保守结论）
+    //
+    // 引擎：官方 `libswsport.so @ 0x10e84` 的 `isValidPoint`（AArch64 JNI），
+    // 逐指令还原 + 29232 组 Unicorn 差分验证，见 `rules.rs`。
+    //
+    // 为什么要这项：服务端逐点算分，分不够的点直接不计入
+    // `validDis` / `validTime`。若大量点被丢，`validDis` 会远小于
+    // `totalDis`，这本身就是异常。这里提前预演，不等提交后看 reasonList。
+    {
+        let mut doomed = 0usize;
+        let mut prev: Option<&super::model::GenPoint> = None;
+        for point in locs {
+            // 与上一点的间距（米）—— 服务端 `s1` 参数。
+            let gap_m = match prev {
+                Some(p) => {
+                    let dy = (point.gLat - p.gLat) * super::geom::MET_PER_DEG_LAT;
+                    let dx = (point.gLng - p.gLng) * super::geom::MET_PER_DEG_LNG;
+                    (dx * dx + dy * dy).sqrt() as f32
+                }
+                None => 0.0,
+            };
+            // `s0` 是瞬时速度；`w2` 就是 `type` 字段。
+            let ok = super::rules::is_valid_point_best_case(
+                point.ptype as i32,
+                point.speed as f32,
+                gap_m,
+            );
+            if !ok {
+                doomed += 1;
+            }
+            prev = Some(point);
+        }
+        let ratio = if locs.is_empty() {
+            1.0
+        } else {
+            1.0 - doomed as f64 / locs.len() as f64
+        };
+        let c = Check::new(
+            "server_point_score_pass_ratio",
+            ratio,
+            ">= 0.98（服务端 isValidPoint 预演）",
+            ratio >= 0.98,
+        );
+        if !c.pass {
+            failures.push(format!(
+                "{} 个点在服务端评分中最佳情形下仍拿不到 65 分，会被丢弃（通过率 {:.1}%）",
+                doomed,
+                ratio * 100.0
+            ));
+        }
+        checks.push(c);
+    }
     AuthenticityReport { checks, failures }
 }
 

@@ -7,11 +7,31 @@ use super::envelope::{md5_hex, now_ms};
 /// tokenSign 固定后缀（与 Android 签名盐同源）。
 pub const TOKEN_SIGN_SUFFIX: &str = "2slhe02lsfiwowlcixisla_sls-_slaor";
 
-pub const IOS_APP_VERSION: &str = "7.3.40";
-pub const ANDROID_APP_VERSION: &str = "7.3.70";
+pub const IOS_APP_VERSION: &str = "7.3.92";
+pub const ANDROID_APP_VERSION: &str = "7.3.92";
 
-pub const UA_IOS: &str = "SWCampus/7.3.40 (iPhone; iOS 18.1; Scale/3.00)";
-pub const UA_ANDROID: &str = "Mozilla/5.0 (Linux; Android 14; 22081212C Build/UKQ1.231003.002) AppleWebKit/537.36 SWCampus/7.3.70";
+/// iOS UA。注意 `Scale` 必须与机型对应（三倍屏的机型 Scale/3.00）。
+///
+/// 版本号必须与 `HeaderIdentity::os_version` 一致——否则同一个请求的
+/// HTTP 头和 `headerSign` 会声明两个不同的系统版本。
+/// 原值写死 18.1 而 identity 默认 26.5.2，就是这个矛盾。
+pub const UA_IOS: &str = "SWCampus/7.3.92 (iPhone; iOS 18.1; Scale/3.00)";
+
+/// 按设备身份生成一致的 iOS UA（版本取自 `os_version`）。
+pub fn ua_ios_for(identity: &HeaderIdentity) -> String {
+    let ov = if identity.os_version.is_empty() {
+        "18.1"
+    } else {
+        identity.os_version.as_str()
+    };
+    format!("SWCampus/{IOS_APP_VERSION} (iPhone; iOS {ov}; Scale/3.00)")
+}
+/// 安卓 UA 是 **OkHttp 默认值**，不是浏览器式串。
+///
+/// 原生 App 用 OkHttp 且从不自己设 UA，抓包里登录/埋点两处都是这个裸字符串。
+/// 旧值 `Mozilla/5.0 (Linux; Android 14; ...) AppleWebKit/537.36 SWCampus/7.3.70`
+/// 看着"更真"，实际是浏览器形态 —— 原生客户端不会这么拼，反而是异常值。
+pub const UA_ANDROID: &str = "okhttp/4.12.0";
 
 /// 设备身份。app_install_time <= 0 表示尚未生成。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -43,6 +63,95 @@ pub struct HeaderIdentity {
     pub city: String,
 }
 
+/// iPhone 机型号码与屏幕参数对照表。
+///
+/// `(deviceName, osVersion, logicPixel, physicPixel)`
+///
+/// **为什么需要这张表**：原版把 `logicPixel` / `physicPixel` 写死为
+/// `360x800` / `1080x2400`，但同时发 `osType=1` + `deviceName=iPhone`。
+/// `1080x2400` 是安卓机分辨率，任何 iPhone 都不是这个值——
+/// 服务端只要有一张机型-分辨率表就能直接挑出来。
+///
+/// 取值均为真实机型，不做任何李生。
+pub const IPHONE_PROFILES: &[(&str, &str, &str, &str)] = &[
+    ("iPhone 16 Pro Max", "18.1", "440x956", "1320x2868"),
+    ("iPhone 16 Pro", "18.1", "402x874", "1206x2622"),
+    ("iPhone 16 Plus", "18.1", "430x932", "1290x2796"),
+    ("iPhone 16", "18.1", "393x852", "1179x2556"),
+    ("iPhone 15 Pro Max", "17.6", "430x932", "1290x2796"),
+    ("iPhone 15 Pro", "17.6", "393x852", "1179x2556"),
+    ("iPhone 15", "17.6", "393x852", "1179x2556"),
+    ("iPhone 14 Pro Max", "16.7", "430x932", "1290x2796"),
+    ("iPhone 14 Pro", "16.7", "393x852", "1179x2556"),
+    ("iPhone 14", "16.7", "390x844", "1170x2532"),
+    ("iPhone 13", "15.7", "390x844", "1170x2532"),
+    ("iPhone 13 mini", "15.7", "375x812", "1080x2340"),
+    ("iPhone SE (3rd)", "15.7", "375x667", "750x1334"),
+];
+
+/// 安卓机型与屏幕参数对照表。
+///
+/// `(deviceName, osVersion, logicPixel, physicPixel)`
+pub const ANDROID_PROFILES: &[(&str, &str, &str, &str)] = &[
+    ("22081212C", "14", "360x800", "1080x2400"),
+    ("2211133C", "13", "393x873", "1080x2400"),
+    ("23127PN0CC", "14", "412x919", "1080x2400"),
+    ("PDEM30", "14", "360x804", "1080x2408"),
+    ("RMX3706", "13", "360x800", "1080x2400"),
+    ("V2219A", "13", "360x800", "1080x2400"),
+];
+
+/// 按机型名查表，不匹配返回 None。
+fn profile_for(
+    platform: &str,
+    device_name: &str,
+) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
+    let table = if platform == "android" {
+        ANDROID_PROFILES
+    } else {
+        IPHONE_PROFILES
+    };
+    table
+        .iter()
+        .find(|(name, _, _, _)| *name == device_name)
+        .copied()
+}
+
+/// 由机型名推导出一致的 (机型, 系统版本, 逻辑像素, 物理像素)。
+///
+/// 机型不在表中时，回退到表首（而不是保留 `iPhone` + 安卓分辨率的矛盾组合），
+/// 并且 **系统版本也一并覆盖**——否则会出现 UA 写 iOS 18.1、
+/// headerSign 写 26.5.2 这种同一请求两个版本号的情况。
+pub fn resolve_device_profile(
+    platform: &str,
+    device_name: &str,
+    os_version: &str,
+) -> (String, String, String, String) {
+    let (dn, ov, lp, pp) = match profile_for(platform, device_name) {
+        Some(p) => p,
+        None => {
+            let table = if platform == "android" {
+                ANDROID_PROFILES
+            } else {
+                IPHONE_PROFILES
+            };
+            table[0]
+        }
+    };
+    // 用户显式指定了合法版本就尊重，但必须与机型表里的一致性无冲突。
+    let ov = if os_version.is_empty() {
+        ov
+    } else {
+        os_version
+    };
+    (
+        dn.to_string(),
+        ov.to_string(),
+        lp.to_string(),
+        pp.to_string(),
+    )
+}
+
 pub fn random_mac() -> String {
     // 本地管理位随机单播 MAC
     let mut rng = rand::thread_rng();
@@ -58,7 +167,9 @@ fn default_platform() -> String {
     "ios".into()
 }
 fn default_os_version() -> String {
-    "26.5.2".into()
+    // 必须与 `UA_IOS` 里的版本一致。原值 26.5.2 不存在（iOS 当前最高 18.x），
+    // 而 UA 写的是 18.1——同一个请求里两个版本号，本身就是异常。
+    "18.1".into()
 }
 fn default_device_name() -> String {
     "iPhone".into()
@@ -132,6 +243,16 @@ pub fn native_token_sign(uid: i64, token: &str, timestamp_ms: i64) -> String {
     md5_hex(format!("{}{}", query, TOKEN_SIGN_SUFFIX).as_bytes())
 }
 
+/// 由 device_id 派生 androidId（16 位小写 hex，同设备恒定）。
+///
+/// 真机取 `Settings.Secure.ANDROID_ID`，是 64 bit 随机数的 16 位小写 hex，
+/// **永不为空** —— 安卓号发空串等于自报是脚本。这里用 md5 派生：既保证同一台
+/// 设备重跑得到同一个值（稳定指纹），又不会与 DeviceId 呈前缀包含关系。
+pub fn android_id_for(device_id: &str) -> String {
+    let digest = md5_hex(device_id.as_bytes());
+    digest.chars().take(16).collect()
+}
+
 fn insert_uuid(map: &mut serde_json::Map<String, serde_json::Value>) -> String {
     let u = uuid::Uuid::new_v4().to_string().to_uppercase();
     map.insert("nonce".into(), serde_json::Value::String(u.clone()));
@@ -178,18 +299,17 @@ pub fn build_native_ios_header(
             serde_json::Value::String(identity.idfa.clone()),
         );
     }
-    m.insert(
-        "logicPixel".into(),
-        serde_json::Value::String("360x640".into()),
+    // 屏幕参数必须与机型一致：原版写死 360x800/1080x2400 是安卓分辨率，
+    // 却同时发 osType=1 + iPhone，属于可直接比对的矛盾。
+    let (_dn, _ov, lp, pp) = resolve_device_profile(
+        &identity.platform,
+        &identity.device_name,
+        &identity.os_version,
     );
-    m.insert(
-        "physicPixel".into(),
-        serde_json::Value::String("1080x1920".into()),
-    );
-    m.insert(
-        "cpuModel".into(),
-        serde_json::Value::String("x86_64".into()),
-    );
+    m.insert("logicPixel".into(), serde_json::Value::String(lp));
+    m.insert("physicPixel".into(), serde_json::Value::String(pp));
+    // 真机 CPU 架构：iOS 是 arm64；x86_64 只存在于模拟器，写上去等于自报"我不是手机"。
+    m.insert("cpuModel".into(), serde_json::Value::String("arm64".into()));
     m.insert(
         "appVersion".into(),
         serde_json::Value::String(IOS_APP_VERSION.into()),
@@ -264,15 +384,24 @@ pub fn build_android_header(
         serde_json::Value::String(identity.device_name.clone()),
     );
     m.insert("IMEI".into(), serde_json::Value::String(String::new()));
-    m.insert(
-        "logicPixel".into(),
-        serde_json::Value::String("1080x2400".into()),
+    // 同样必须与机型一致。
+    let (_dn, _ov, lp, pp) = resolve_device_profile(
+        &identity.platform,
+        &identity.device_name,
+        &identity.os_version,
     );
+    m.insert("logicPixel".into(), serde_json::Value::String(lp));
+    m.insert("physicPixel".into(), serde_json::Value::String(pp));
+    // androidId 在真机上是 Settings.Secure.ANDROID_ID（64 bit 随机数的 16 位小写
+    // hex），**永不为空**。发空串等于举手说"我是脚本"。
+    //
+    // 由 device_id 派生而不是随机：同一台设备重跑必须得到同一个值（换值 = 换
+    // 设备指纹）。用 md5 而非直接截取 —— DeviceId 是 UUID，直接截前 16 位会与
+    // DeviceId 呈"前缀包含"关系，那本身就是可校验的关联特征。
     m.insert(
-        "physicPixel".into(),
-        serde_json::Value::String("1080x2400".into()),
+        "androidId".into(),
+        serde_json::Value::String(android_id_for(&device_id)),
     );
-    m.insert("androidId".into(), serde_json::Value::String(String::new()));
     m.insert("blMac".into(), serde_json::Value::String(String::new()));
     m.insert("wifiMac".into(), serde_json::Value::String(String::new()));
     m.insert(
@@ -385,10 +514,23 @@ mod tests {
         let (json, _) = build_android_header(&identity, 42, "TK", Some(1788958186123));
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["osType"], "0");
-        assert_eq!(v["appVersion"], "7.3.70");
+        assert_eq!(v["appVersion"], ANDROID_APP_VERSION);
         assert_eq!(v["studentId"], 42);
         assert!(v.get("tokenSign").is_some());
         assert!(json.starts_with("{\"Accept\":\"application/json\""));
+        // androidId 必须是 16 位小写 hex 且同设备恒定（真机永不为空）
+        let aid = v["androidId"].as_str().unwrap();
+        assert_eq!(aid.len(), 16, "androidId 长度应为 16，实际 {aid:?}");
+        assert!(
+            aid.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
+            "androidId 应为小写 hex，实际 {aid:?}"
+        );
+        let (json2, _) = build_android_header(&identity, 42, "TK", Some(1788958199000));
+        let v2: serde_json::Value = serde_json::from_str(&json2).unwrap();
+        assert_eq!(v2["androidId"], v["androidId"], "androidId 必须跨请求恒定");
+        // 且不能是 DeviceId 的前缀（那本身是可校验的关联特征）
+        assert!(!identity.device_id.to_lowercase().starts_with(aid));
     }
 
     /// 同一身份的 appInstallTime 跨请求零漂移（设备一致性防护）。
@@ -426,5 +568,90 @@ mod tests {
             ..Default::default()
         };
         assert!(!configured.has_unconfigured_default_location());
+    }
+}
+
+#[cfg(test)]
+mod device_consistency_tests {
+    use super::*;
+
+    fn id(platform: &str, name: &str, ver: &str) -> HeaderIdentity {
+        HeaderIdentity {
+            platform: platform.into(),
+            device_id: "AAAA-BBBB".into(),
+            idfa: String::new(),
+            os_version: ver.into(),
+            device_name: name.into(),
+            manufacturer: String::new(),
+            anchor_lat: 39.4930,
+            anchor_lon: 116.2550,
+            app_install_time: 1_700_000_000_000,
+            mac_address: "08:a4:6f:45:37:ee".into(),
+            city: "廊坊市".into(),
+        }
+    }
+
+    fn json_of(i: &HeaderIdentity) -> serde_json::Value {
+        let (s, _) = build_native_ios_header(i, 123, "tok", Some(1_700_000_000_000));
+        serde_json::from_str(&s).unwrap()
+    }
+
+    /// 屏幕参数必须与机型对应：osType=1 + iPhone 时不能是安卓分辨率。
+    #[test]
+    fn iphone_pixels_are_never_android_values() {
+        let v = json_of(&id("ios", "iPhone", "18.1"));
+        let pp = v["physicPixel"].as_str().unwrap();
+        let lp = v["logicPixel"].as_str().unwrap();
+        assert_ne!(pp, "1080x2400", "iPhone 不可能是安卓分辨率");
+        assert_ne!(lp, "360x800", "iPhone 不可能是安卓逻辑分辨率");
+    }
+
+    /// 每个 iPhone 机型的物理分辨率都要像真机，且逻辑/物理宽高比一致。
+    #[test]
+    fn physics_pixels_look_like_iphone() {
+        for (name, _, lp, pp) in IPHONE_PROFILES {
+            let (w, h) = pp.split_once('x').unwrap();
+            let (w, h): (u32, u32) = (w.parse().unwrap(), h.parse().unwrap());
+            assert!(w >= 750 && w <= 1400, "{name} 宽 {w} 不像 iPhone");
+            assert!(h > w, "{name} 高度应大于宽度");
+            let (lw, lh) = lp.split_once('x').unwrap();
+            let (lw, lh): (u32, u32) = (lw.parse().unwrap(), lh.parse().unwrap());
+            assert!(
+                (lw as f64 / lh as f64 - w as f64 / h as f64).abs() < 0.02,
+                "{name} 逻辑与物理宽高比不一致"
+            );
+        }
+    }
+
+    /// UA 里的 iOS 版本必须与 headerSign 的 osVersion 一致。
+    #[test]
+    fn ua_version_matches_header_version() {
+        let i = id("ios", "iPhone", "17.6");
+        let v = json_of(&i);
+        let header_ver = v["osVersion"].as_str().unwrap();
+        let ua = ua_ios_for(&i);
+        assert!(
+            ua.contains(&format!("iOS {header_ver}")),
+            "UA [{ua}] 与 headerSign osVersion [{header_ver}] 不一致"
+        );
+    }
+
+    /// 默认 identity 也必须自洽。
+    #[test]
+    fn default_identity_is_self_consistent() {
+        let i = id("ios", "iPhone", &default_os_version());
+        let v = json_of(&i);
+        assert_eq!(v["osType"], "1");
+        assert_ne!(v["physicPixel"], "1080x2400");
+        let ua = ua_ios_for(&i);
+        assert!(ua.contains(&format!("iOS {}", v["osVersion"].as_str().unwrap())));
+    }
+
+    /// 安卓机型必须拿到安卓分辨率。
+    #[test]
+    fn android_profile_matches() {
+        let (_, _, lp, pp) = resolve_device_profile("android", "22081212C", "");
+        assert_eq!(lp, "360x800");
+        assert_eq!(pp, "1080x2400");
     }
 }

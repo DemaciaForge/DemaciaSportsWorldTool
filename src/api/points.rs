@@ -104,7 +104,8 @@ pub fn fetch_points_context_ext(
     }
     let body = body.to_string();
 
-    let out = client.envelope_request("POST", &url, &body, crate::crypto::header::UA_IOS, &[])?;
+    let ua = crate::crypto::header::ua_ios_for(&client.identity);
+    let out = client.envelope_request("POST", &url, &body, &ua, &[])?;
     let fallback = |log: &mut dyn FnMut(&str)| -> Result<PointsContext, String> {
         if let Some((_ts, pts, area)) = model::load_points_cache_context_for(anchor) {
             if !pts.is_empty() {

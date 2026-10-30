@@ -12,6 +12,7 @@ pub mod geom;
 pub mod model;
 pub mod postfix;
 pub mod realism;
+pub mod rules;
 pub mod shape;
 pub mod stadium;
 pub mod wire;
@@ -300,18 +301,32 @@ mod tests {
             last_sd.abs() < 1e-9,
             "末点 stepDistance 应为 0，实际 {last_sd}"
         );
-        // segment_json 是空串 gzip
+        // segment_json 现在是真实的 30 秒分段（旧实现写空串，服务端与详情页
+        // 都拿不到分段数据）。
         let raw =
             crate::crypto::envelope::b64_decode(obj["segment_json"].as_str().unwrap()).unwrap();
         let mut dec = flate2::read::GzDecoder::new(&raw[..]);
         let mut s = String::new();
         dec.read_to_string(&mut s).unwrap();
-        assert_eq!(s, "");
-        // obs keys 两个
+        let segs: serde_json::Value =
+            serde_json::from_str(&s).expect("segment_json 必须是 JSON 数组");
+        let segs = segs.as_array().expect("segment_json 必须是数组");
+        assert!(!segs.is_empty(), "分段不能为空");
+        // 每段 30 秒（末段可能不足），字段齐全
+        for (i, seg) in segs.iter().enumerate() {
+            assert_eq!(seg["id"].as_i64(), Some(i as i64 + 1));
+            assert_eq!(seg["speedStandard"].as_i64(), Some(900));
+            assert_eq!(seg["intervalStepModel"].as_i64(), Some(0));
+            let begin = seg["startTime"].as_i64().unwrap();
+            let end = seg["endTime"].as_i64().unwrap();
+            assert!(end > begin, "段 {i} 宽度必须为正");
+            assert!(end - begin <= 30_000, "段 {i} 不得超过 30 秒");
+        }
+        // obs key 只有 1 个（真机只写日期式那一个）
         let ks = obs_keys(&track, 1320403809, "UUID-TEST");
-        assert_eq!(ks.len(), 2);
+        assert_eq!(ks.len(), 1);
         assert!(ks[0].contains("run_data/"));
-        assert!(ks[1].starts_with("run_data/1320/1320403809.json"));
+        assert!(ks[0].ends_with("/UUID-TEST.json"));
     }
 }
 

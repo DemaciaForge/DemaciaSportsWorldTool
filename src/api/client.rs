@@ -8,7 +8,7 @@ use crate::crypto::decrypt::{decrypt_response, derive_paes_key, Decrypted};
 use crate::crypto::envelope::{
     build_envelope, build_envelope_ts, rsa_public_key, EnvelopeSession, OuterOrder,
 };
-use crate::crypto::header::{build_header_for, HeaderIdentity, UA_IOS};
+use crate::crypto::header::{build_header_for, ua_ios_for, HeaderIdentity};
 
 pub fn make_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
@@ -81,7 +81,8 @@ impl ApiClient {
         req = req.set("Accept", "application/json");
         req = req.set("Content-Type", "application/json");
         req = req.set("User-Agent", ua);
-        req = req.set("appVersion", "7.3.40");
+        // 与头里的 appVersion 同源；写死旧版本会被服务端按"过期客户端"区别对待。
+        req = req.set("appVersion", crate::crypto::header::IOS_APP_VERSION);
         req = req.set("headerSign", &header_env.json);
         for (k, v) in extra_headers {
             req = req.set(k, v);
@@ -143,7 +144,9 @@ impl ApiClient {
         extra_headers: &[(String, String)],
     ) -> Result<serde_json::Value, String> {
         let url = format!("{}{}", host, path);
-        let out = self.envelope_request(method, &url, body_plain, UA_IOS, extra_headers)?;
+        // UA 里的 iOS 版本必须与 headerSign 一致，所以从 identity 生成。
+        let ua = ua_ios_for(&self.identity);
+        let out = self.envelope_request(method, &url, body_plain, &ua, extra_headers)?;
         let dec = out.decrypted.ok_or_else(|| {
             format!(
                 "HTTP {} 响应解密失败（len={}）原文: {}",
