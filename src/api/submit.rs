@@ -58,6 +58,11 @@ pub struct SubmitParams {
     pub uid: i64,
     pub selected_unid: i64,
     pub policy: i64,
+    /// 策略下发时刻（`runModePolicy.data.timestamp`）。
+    ///
+    /// 7.3.92 起不再用它拼 `runes` 请求头，签名里也没有这个字段；保留它是为了
+    /// 让调用方能在日志/账本里对齐「这次提交用的是哪一份策略」。
+    #[allow(dead_code)]
     pub policy_ts: i64,
     pub min_distance: i64,
     pub weight: f64,
@@ -205,18 +210,17 @@ pub fn submit_record(
         now + 1,
     );
 
-    let runes = format!("{}{}", p.policy_ts, p.uid);
-    let runef = format!("{}{}", run_uuid, start_ms);
     let mut req = client.agent.post(&format!("{HOST}{RECORD_PATH}"));
     req = req
         // 与 App 一致（OooO0OO.java:131-132）：不带 charset，并带 Accept。
         .set("Accept", "application/json")
         .set("Content-Type", "application/json")
         .set("User-Agent", UA_ANDROID)
-        .set("appVersion", "7.3.40")
-        .set("headerSign", &header_env.json)
-        .set("runes", &runes)
-        .set("runef", &runef);
+        .set("appVersion", crate::crypto::header::ANDROID_APP_VERSION)
+        .set("headerSign", &header_env.json);
+    // ★ 7.3.92 起客户端**不再发送** runes / runef 这两个旧请求头
+    //   （抓包还原套件与实测均确认）。多带两个只有旧版本才有的头，
+    //   等于给服务端多一个"这个客户端不是 7.3.92"的判据。
     for (k, v) in &hp_extra {
         req = req.set(k, v);
     }

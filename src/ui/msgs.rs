@@ -336,6 +336,17 @@ fn run_popup(v: &serde_json::Value) -> PopupInfo {
     // 达标判定明细（详情接口 reasonList）
     if let Ok(detail) = crate::api::flow::VERIFY_DETAIL.lock() {
         if let Some(d) = detail.as_ref() {
+            // complete + isCheat 的联合结论；只看 complete 会把「达标但过程
+            // 异常」显示成完全正常。
+            let complete = d.get("complete").and_then(|x| x.as_bool()).unwrap_or(false);
+            let is_cheat = d
+                .get("isCheat")
+                .and_then(|x| x.as_i64().or_else(|| x.as_bool().map(i64::from)))
+                .unwrap_or(0);
+            lines.push(format!(
+                "结论：{}",
+                crate::track::rules::Verdict::from_fields(complete, is_cheat).label()
+            ));
             if let Some(list) = d.get("reasonList").and_then(|x| x.as_array()) {
                 for r in list {
                     let ok = r.get("complete").and_then(|x| x.as_bool()).unwrap_or(false);

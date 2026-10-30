@@ -188,3 +188,60 @@ K–R 落地后，另外满足：
 16. 途中（首末窗除外）不存在配速低于 `1.0 m/s` 的 10s 窗。
 
 这些阈值都写在 `track::realism` / `track::wire` 的常量与测试里，改动即回归。
+
+---
+
+## 5. 对端「运动世界控制台」v2.7.0 的对照（2026-10-30）
+
+逆向对象：`sw-control setup v2.7.0.exe`（Inno Setup 6.4.3）→ 安装后的
+`D:\sw-control`（PyInstaller 打包，Python 3.13，PySide6）。脚本层从打包归档
+还原为 `.pyc` 后反汇编，`_internal/auto_login.py` 另为明文源码。
+
+**它的定位与本文档无关**：它是同一 App 的另一套复刻工具，因此下面的条目
+都属于「同一服务端的协议事实」，不是从它那里借来的设计。
+
+证据强度分三档，采用时按档位区别对待：
+
+- **强**：它能自证（真机记录逐字段比对 / APK 串表命中 / 反汇编逐指令还原）；
+- **中**：有实测但在单一学校或单一时段；
+- **弱**：只有注释或推测，本文档**不采纳**。
+
+### 5.1 已采纳（强证据）
+
+| # | 位置 | 原状态 | 改动 |
+|---|---|---|---|
+| S | `wire.rs::build_windows` | `id = (rrid%100000)*1000+秒`、`queueNum` 恒 0 | `id` 改为 1,2,3… 连续；`queueNum = k/3`（每 30 秒一批）；`flag` = `startTime` |
+| T | `wire.rs` | `stepsPerTenSec` 的 `avgDiff/maxDiff/minDiff` 恒 `0/0/1000` | 改为「步长基准 × U(0.79,0.86) / × U(1.10,1.28)」，按 `(start_ms, 窗序, 步数)` 播种，可复现 |
+| U | `wire.rs::build_segments` | `segment_json` 是**空串** | 30 秒分段，11 字段，`avgSpeed` 单位是**分/公里**（不是 m/s），`speedStandard` 恒 900；由 10 秒窗聚合，Σ段距 ≡ Σ窗距 |
+| V | `wire.rs::obs_keys` | 写 2 个 key（日期式 + rrid 式） | 只写日期式 1 个：rrid 式那个 App 从不读，多写只是两倍体积加一处指纹 |
+| W | `api/obs.rs` | `contentType: application/json` | `text/plain`（与对象实际内容一致） |
+| X | `api/submit.rs` | 发 `runes` / `runef` 两个请求头 | 删除：7.3.92 起客户端不再发这两个头 |
+| Y | `crypto/header.rs` | `cpuModel: x86_64`、`logicPixel 360x640` | `arm64`、`360x800`/`1080x2400`：`x86_64` 只存在于模拟器 |
+| Z | `crypto/header.rs` | `androidId` 恒空串 | 由 `device_id` md5 派生 16 位小写 hex（真机永不为空，且同设备恒定） |
+| AA | `crypto/header.rs` | 版本 7.3.40 / 7.3.70 | 7.3.92（含 UA 内的版本串） |
+| AB | `track/calorie.rs` | MET 分段式 + 功率系数 1.1 | `kcal = 体重×km×1.036`、`power = 体重×m/s×0.98`：两路反推的隐含体重必须一致（旧式两路互相矛盾） |
+| AC | `api/records.rs` | 详情走 `v70260` | `v70320`（实测该路径才带判定字段）；仅「路径不存在」时降级 |
+| AD | `api/records.rs` / UI | 只读 `complete` | 增 `isCheat`，结论 = `complete` + `isCheat` 联合；`reasonList[].type` 映射为规则类别 |
+
+### 5.2 只作只读工具，**不接入判定闸门**（证据不足）
+
+`track/rules.rs` 收录了 `libswsport.so@0x10e84` 的 `isValidPoint` 评分表
+（逐指令还原 + 29,232 组 Unicorn 差分）。评分本身可信，但：
+
+- `w2`（点位种类）与 `w3`（"类型/序号分档"）在原生调用点的**取值语义未恢复**；
+- 拿 `type` 当 `w2`、点序号当 `w3` 代入，会把一条正常轨迹的前几个点判成无效
+  —— 实测 2000 m 轨迹有 20~27 个点「不过我方的评分」，而真机显然不会。
+
+因此只保留 `is_valid_point_best_case`（在最高档位下仍不过才判无效）作为
+**诊断**，并明确**不**把它做成提交前的硬闸门：一个错误的闸门会拦掉本来能过的
+记录，代价远大于收益。若将来在原生侧确证 `w2/w3`，再把它升级为闸门。
+
+### 5.3 明确不采纳
+
+| 项 | 不采纳的原因 |
+|---|---|
+| OBS 双层 base64 | 对端自己记载已推翻该结论（App 只 gunzip 一次） |
+| 自由跑写 `fivePointJson` | 真机自由跑无打卡点；我们的实现本来就不传 |
+| `status == 1` 判达标 | 对端实测推翻：8 条正常记录 `status` 全为 0 而 `complete` 全为 true |
+| 单校区配速区间（4′00″–10′00″） | 各校配置不同，写死会误判 |
+

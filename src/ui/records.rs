@@ -306,13 +306,35 @@ fn draw_detail_panel(ui: &mut egui::Ui, raw: &serde_json::Value) {
     }
 
     // 达标判定
+    //
+    // ★ 结论是 `complete` 与 `isCheat` 两个字段的**联合**结果，光看
+    // `complete` 会把「数据达标但过程异常」显示成完全正常。
+    let complete = raw
+        .get("complete")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    let is_cheat = raw
+        .get("isCheat")
+        .and_then(|x| x.as_i64().or_else(|| x.as_bool().map(i64::from)))
+        .unwrap_or(0);
+    let verdict = crate::track::rules::Verdict::from_fields(complete, is_cheat);
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new("达标判定")
+            .strong()
+            .color(theme::text()),
+    );
+    mobile::row(ui, |ui| {
+        let color = if complete && is_cheat == 0 {
+            theme::ok()
+        } else if complete {
+            theme::text_dim()
+        } else {
+            theme::err()
+        };
+        ui.colored_label(color, verdict.label());
+    });
     if let Some(list) = raw.get("reasonList").and_then(|x| x.as_array()) {
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new("达标判定")
-                .strong()
-                .color(theme::text()),
-        );
         for r in list {
             let ok = r.get("complete").and_then(|x| x.as_bool()).unwrap_or(false);
             let reason = r.get("reason").and_then(|x| x.as_str()).unwrap_or("");

@@ -6,12 +6,16 @@ use serde_json::{json, Value};
 pub const OBS_SIGN_PATH: &str = "/api/obs/temporary/url";
 
 /// 换取签名 URL。
+///
+/// `contentType` 必须是 **`text/plain`**：真机 OBS 对象是「文本形态的
+/// gzip+base64 映射」，签名时若声明 `application/json`，签名 URL 的
+/// Content-Type 会跟着写成 JSON，与实际内容不符。
 pub fn sign_url(client: &mut ApiClient, method: &str, key: &str) -> Result<String, String> {
     let body = json!({
         "bucketName": "iydsj-hbase-hot",
         "objectKey": key,
         "method": method,
-        "contentType": "application/json",
+        "contentType": "text/plain",
     })
     .to_string();
     let biz = client.call("POST", OBS_SIGN_PATH, &body, &[])?;
@@ -34,7 +38,8 @@ pub fn put_object(
     let agent = super::client::make_agent();
     let resp = agent
         .put(signed_url)
-        .set("Content-Type", "application/json")
+        // 与签名时的 contentType 保持一致（真机是文本形态对象）。
+        .set("Content-Type", "text/plain")
         .send_bytes(payload)
         .map_err(super::client::ureq_err)?;
     log(&format!(
@@ -45,7 +50,10 @@ pub fn put_object(
     Ok(())
 }
 
-/// 上传到两个 objectKey（详情页 + 兜底路径）。
+/// 上传到给定的 objectKey 列表。
+///
+/// 真机只写 1 个 key（`track::wire::obs_keys` 已收敛为日期式单键），这里
+/// 保留循环是为了让调用方仍能显式传入多键做对照实验。
 pub fn upload_both_keys(
     client: &mut ApiClient,
     keys: &[String],
