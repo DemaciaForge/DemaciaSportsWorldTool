@@ -493,8 +493,14 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
             (f / 2.1).clamp(-1.0, 1.0)
         }
     };
-    let count_mean = rng.uniform(20.0, 30.0);
-    let count_span = rng.uniform(5.0, 9.0);
+    // `count` 标定自 3 条真机记录（1039 个定位点）：
+    //   取值全为整数，范围 53-79，均值 67.6，标准差 5.3，
+    //   相邻差中位数 2（空间自相关 0.56-0.67）。
+    // 旧值 20-30/8-44 与真机区间完全不重叠。
+    // 不与海拔挂钩：真机记录内 corr(count,bdA) 为 +0.278/-0.195/-0.019，
+    // 方向不一致，那个 0.46 是记录间差异造成的假相关。
+    let count_mean = rng.uniform(63.0, 71.0);
+    let count_span = rng.uniform(9.0, 13.0);
     for i in 0..n {
         let mut point = if i <= 1 {
             tracker.advance(0.0, 0.0, &mut rng)
@@ -522,8 +528,10 @@ pub(crate) fn assemble(a: Assembly<'_>) -> Track {
         // 定位精度缓慢游走；卫星数由空间场决定（同一段路读数可复现）。
         radius_now = (radius_now - radius_mean) * 0.85 + radius_mean + rng.gauss(0.0, 0.22);
         radius_now = radius_now.clamp(1.2, if typ == 3 { 6.5 } else { 3.2 });
-        let count_now = count_mean + count_span * sat_field(point.0, point.1) + rng.gauss(0.0, 1.2);
-        let count_now = count_now.clamp(8.0, 44.0);
+        // 噪声 σ=2.0：真机相邻差中位数是 2，而纯光滑场只会得到 1。
+        let count_now = count_mean + count_span * sat_field(point.0, point.1) + rng.gauss(0.0, 2.0);
+        // 真机实测 53-79（p1=56, p99=78），留一点余量取 52-80。
+        let count_now = count_now.clamp(52.0, 80.0);
         let rad = round_to(radius_now, 2);
         let count = round_to(count_now, 0) as i64;
         let state = 1;

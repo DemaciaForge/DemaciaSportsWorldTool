@@ -435,3 +435,48 @@ mod alt_calibration {
         }
     }
 }
+#[cfg(test)]
+mod count_calibration {
+    use super::generator::build;
+    use super::tests::sample_points;
+
+    /// `count` 必须落在真机实测区间：3 条记录、1039 个点，
+    /// 范围 53-79、均值 67.6、标准差 5.3、相邻差中位 2。
+    #[test]
+    fn count_matches_real_devices() {
+        let pts = sample_points();
+        let mut allel: Vec<i64> = Vec::new();
+        for seed in 0..6u64 {
+            let tr = build(
+                4000.0,
+                1400,
+                seed,
+                (39.4930, 116.2550),
+                1_788_958_186_123,
+                &pts,
+            );
+            let c: Vec<i64> = tr.locations.iter().map(|p| p.count).collect();
+            let lo = *c.iter().min().unwrap();
+            let hi = *c.iter().max().unwrap();
+            let mean = c.iter().sum::<i64>() as f64 / c.len() as f64;
+            allel.extend_from_slice(&c);
+
+            assert!(
+                (50..=85).contains(&lo) && (50..=85).contains(&hi),
+                "seed={seed} count 范围 {lo}..{hi} 偏离真机 53-79"
+            );
+            assert!(
+                (58.0..=78.0).contains(&mean),
+                "seed={seed} count 均值 {mean:.1} 偏离真机 67.6"
+            );
+        }
+        allel.sort();
+        let n = allel.len();
+        let p1 = allel[n / 100];
+        let p99 = allel[n * 99 / 100];
+        assert!(
+            (50..=62).contains(&p1) && (75..=85).contains(&p99),
+            "count p1={p1} p99={p99} 偏离真机 56/78"
+        );
+    }
+}

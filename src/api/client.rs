@@ -75,7 +75,11 @@ impl ApiClient {
         );
 
         let mut req = self.agent.request(method, url);
-        req = req.set("Content-Type", "application/json; charset=utf-8");
+        // 与 App 一致（OooO0OO.java:131-132）：
+        //   Accept: application/json
+        //   Content-Type: application/json        <- 不带 charset
+        req = req.set("Accept", "application/json");
+        req = req.set("Content-Type", "application/json");
         req = req.set("User-Agent", ua);
         req = req.set("appVersion", "7.3.40");
         req = req.set("headerSign", &header_env.json);

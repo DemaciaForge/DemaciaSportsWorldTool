@@ -209,7 +209,9 @@ pub fn submit_record(
     let runef = format!("{}{}", run_uuid, start_ms);
     let mut req = client.agent.post(&format!("{HOST}{RECORD_PATH}"));
     req = req
-        .set("Content-Type", "application/json; charset=utf-8")
+        // 与 App 一致（OooO0OO.java:131-132）：不带 charset，并带 Accept。
+        .set("Accept", "application/json")
+        .set("Content-Type", "application/json")
         .set("User-Agent", UA_ANDROID)
         .set("appVersion", "7.3.40")
         .set("headerSign", &header_env.json)
