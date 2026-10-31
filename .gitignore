@@ -49,3 +49,4 @@ out.txt
 
 # 临时提交信展开文件（git commit -F 用，不应入库）
 _*.txt
+__pycache__/
