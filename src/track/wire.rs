@@ -1,11 +1,11 @@
 //! OBS 对象组装。
 //!
-//! 10 键对象，每值 gzip+base64；BD→GCJ 单次转换；30 键协议点集（与官方点结构
+//! 11 键对象，每值 gzip+base64；BD→GCJ 单次转换；27 键协议点集（与官方点结构
 //! 对齐）；10s 窗（speed/step_freq，与提交体共用 [`ten_second_spans`]）；
 //! 每 1000m 一圈；五点 fixed_point_json。
 #![allow(non_snake_case)]
 
-use chrono::{Local, TimeZone};
+use chrono::{FixedOffset, TimeZone};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use rand::rngs::StdRng;
@@ -125,13 +125,15 @@ pub fn ten_second_spans(track: &Track) -> Vec<TenSecondSpan> {
         let end = (begin + 10).min(total);
         let d = cumulative_at(locs, end as f64, |p| p.totalDis)
             - cumulative_at(locs, begin as f64, |p| p.totalDis);
-        let s = cumulative_at(locs, end as f64, |p| p.steps as f64)
-            - cumulative_at(locs, begin as f64, |p| p.steps as f64);
+        // 先量化累计快照，再求差；逐窗独立 round(差值) 会累计丢步/多步。
+        // 同一边界两侧使用相同整数，才能保持望远镜求和。
+        let s = cumulative_at(locs, end as f64, |p| p.steps as f64).round() as i64
+            - cumulative_at(locs, begin as f64, |p| p.steps as f64).round() as i64;
         out.push(TenSecondSpan {
             begin_s: begin,
             end_s: end,
             distance_m: round_to(d.max(0.0), 4),
-            steps: s.max(0.0).round() as i64,
+            steps: s.max(0),
         });
     }
     out
@@ -200,7 +202,6 @@ pub fn five_point_payload(points: &[Value], start_ms: i64) -> Vec<Value> {
                 "glat": p["glat"].as_f64().unwrap_or(0.0),
                 "glon": p["glon"].as_f64().unwrap_or(0.0),
                 "id": i as i64 + 1,
-                // 跑完态：本次命中的打卡点全部标为固定点（详情页显示绿色打勾）。
                 // 原样回传服务端标记：改写会让「必经/普通」分类与地图颜色失真。
                 "isFixed": p.get("isFixed").and_then(|v| v.as_i64()).unwrap_or(1),
                 "isPass": true,
@@ -658,11 +659,7 @@ mod validation_tests {
             (d / track.totalDistance - 1.0).abs() < 1e-3,
             "窗距离合计 {d}"
         );
-        assert!(
-            (n - track.totalSteps).unsigned_abs() <= 2,
-            "窗步数合计 {n} vs totalSteps {}",
-            track.totalSteps
-        );
+        assert_eq!(n, track.totalSteps, "窗步数必须精确守恒");
         assert_eq!(t, track.totalTime);
         // 与 `speedPerTenSec` / `stepsPerTenSec` 逐项一致（OBS 读的就是这两组）。
         assert_eq!(spans.len(), track.speedPerTenSec.len());
@@ -736,6 +733,44 @@ mod validation_tests {
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
         );
+    }
+
+    #[test]
+    fn fractional_step_boundaries_do_not_accumulate_rounding_error() {
+        let mut track = crate::track::generator::build(
+            50.0,
+            25,
+            11,
+            (38.9, 121.54),
+            1_700_000_000_000,
+            &[(38.9, 121.54), (38.901, 121.541)],
+        );
+        let mut first = track.locations[0].clone();
+        first.totalTime = 0;
+        first.totalDis = 0.0;
+        first.steps = 0;
+        let mut last = first.clone();
+        last.totalTime = 25;
+        last.totalDis = 50.0;
+        last.steps = 4;
+        track.locations = vec![first, last];
+        track.totalTime = 25;
+        track.totalSteps = 4;
+        let spans = ten_second_spans(&track);
+        assert_eq!(
+            spans.iter().map(|s| s.steps).collect::<Vec<_>>(),
+            vec![2, 1, 1]
+        );
+        assert_eq!(spans.iter().map(|s| s.steps).sum::<i64>(), 4);
+    }
+
+    #[test]
+    fn obs_hour_uses_china_time_across_utc_date_boundary() {
+        let ms = chrono::DateTime::parse_from_rfc3339("2026-10-26T16:01:00Z")
+            .unwrap()
+            .timestamp_millis();
+        assert_eq!(obs_hour_bucket(ms).unwrap(), "2026102700");
+        assert!(obs_hour_bucket(i64::MAX).is_err());
     }
 
     /// 30 秒分段必须与 10 秒窗自洽（Σ段距 ≡ Σ窗距，段号 1..n）。
@@ -1013,7 +1048,7 @@ fn build_laps(track: &Track, start_ms: i64) -> Vec<Value> {
     laps
 }
 
-/// 组装 10 键 OBS 对象（值均 gzip+base64；segment_json/runFaceCheck 为空串 gzip）。
+/// 组装 11 键 OBS 对象；未采集的扩展/人脸信息为空串 gzip，不伪造核验结果。
 pub fn build_obs_object(
     track: &Track,
     rrid: i64,
@@ -1056,6 +1091,7 @@ pub fn build_obs_object_with_area(
         "uuid": gz_str(uuid),
         "uid": gz_str(&uid.to_string()),
         "run_data": gz_json(&run_wrap),
+        "extension_json": gz_str(""),
         "fixed_point_json": gz_json(&fx),
         "segment_json": gz_json(&Value::Array(segs)),
         "speed_json": gz_json(&Value::Array(sp)),
@@ -1065,17 +1101,19 @@ pub fn build_obs_object_with_area(
     })
 }
 
-/// OBS objectKey —— **只返回 App 真正会读的那一个（日期式）**。
-///
-/// 真机只写 1 个 key：`run_data/<YYYYMMDDHH>/<uuid>.json`。旧实现额外写了
-/// `run_data/<rrid/1000000>/<rrid>.json`：App 从不读它，多写一条只是给服务端
-/// 留一处「和真机不一样」的痕迹（同一个对象两倍体积、两个签名 URL）。
-/// 读侧按记录算 key 时也不需要它，因此删除。
-pub fn obs_keys(track: &Track, _rrid: i64, uuid: &str) -> Vec<String> {
-    let t0 = Local
-        .timestamp_millis_opt(track.startTime)
+/// 计分跑样本的小时桶使用 UTC+8；上传和历史回读共用此转换。
+pub fn obs_hour_bucket(start_ms: i64) -> Result<String, String> {
+    // 业务小时桶使用中国时间，不随部署机器（例如 UTC 服务器）的本地时区变化。
+    FixedOffset::east_opt(8 * 3600)
+        .expect("UTC+8 is a valid fixed offset")
+        .timestamp_millis_opt(start_ms)
         .single()
         .map(|t| t.format("%Y%m%d%H").to_string())
-        .unwrap_or_default();
-    vec![format!("run_data/{t0}/{uuid}.json")]
+        .ok_or_else(|| "OBS 起跑时间超出有效范围".into())
+}
+
+/// 日期式单 key：`run_data/<YYYYMMDDHH>/<uuid>.json`。
+pub fn obs_keys(track: &Track, _rrid: i64, uuid: &str) -> Result<Vec<String>, String> {
+    let t0 = obs_hour_bucket(track.startTime)?;
+    Ok(vec![format!("run_data/{t0}/{uuid}.json")])
 }

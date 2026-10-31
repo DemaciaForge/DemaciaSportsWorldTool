@@ -289,13 +289,19 @@ fn cmd_run(rest: &[&str]) -> i32 {
     match crate::api::flow::run_full_flow(&mut client, &params, &mut log) {
         Ok(out) => {
             println!(
-                "跑步提交成功 rrid={} uuid={} obs={}/2 verify={}",
+                "记录已保存 rrid={} uuid={} obs={}/{} 结论={}",
                 out.result.rrid,
                 out.result.uuid,
                 out.obs_ok,
-                if out.detail_ok { "通过" } else { "未通过" }
+                out.obs_expected,
+                out.verification_label()
             );
-            0
+            if out.verified() {
+                0
+            } else {
+                eprintln!("记录已保存，但上传或达标验证未完成；请查询该记录，不要自动重复提交。");
+                2
+            }
         }
         Err(e) => {
             eprintln!("跑步提交失败: {e}");
@@ -521,14 +527,13 @@ fn cmd_obs_real(rest: &[&str]) -> i32 {
             println!("⚠ rrid={} 无 uuid，跳过", row.rrid);
             continue;
         }
-        // 与 `wire::obs_keys` 同一套推导：小时桶取起跑时刻的本地时间。
-        let t0 = {
-            use chrono::TimeZone;
-            chrono::Local
-                .timestamp_millis_opt(row.start_time)
-                .single()
-                .map(|t| t.format("%Y%m%d%H").to_string())
-                .unwrap_or_default()
+        // 上传/回读共用 UTC+8 小时桶，不受服务器本地时区影响。
+        let t0 = match crate::track::wire::obs_hour_bucket(row.start_time) {
+            Ok(bucket) => bucket,
+            Err(e) => {
+                println!("⚠ rrid={} {e}，跳过", row.rrid);
+                continue;
+            }
         };
         let keys = [
             format!("run_data/{t0}/{}.json", row.uuid),

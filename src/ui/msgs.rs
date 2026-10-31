@@ -324,13 +324,10 @@ fn run_popup(v: &serde_json::Value) -> PopupInfo {
         ),
         format!("开始时间：{}", fmt_hms(v["start"].as_i64().unwrap_or(0))),
         format!(
-            "OBS 上传：{}/2 · 详情验证：{}",
+            "OBS 上传：{}/{} · 服务端判定：{}",
             v["obs_ok"].as_i64().unwrap_or(0),
-            if v["verify"].as_bool().unwrap_or(false) {
-                "通过"
-            } else {
-                "未通过"
-            }
+            v["obs_expected"].as_i64().unwrap_or(0),
+            v["verification_label"].as_str().unwrap_or("结果未知")
         ),
     ];
     // 达标判定明细（详情接口 reasonList）
@@ -338,14 +335,11 @@ fn run_popup(v: &serde_json::Value) -> PopupInfo {
         if let Some(d) = detail.as_ref() {
             // complete + isCheat 的联合结论；只看 complete 会把「达标但过程
             // 异常」显示成完全正常。
-            let complete = d.get("complete").and_then(|x| x.as_bool()).unwrap_or(false);
-            let is_cheat = d
-                .get("isCheat")
-                .and_then(|x| x.as_i64().or_else(|| x.as_bool().map(i64::from)))
-                .unwrap_or(0);
             lines.push(format!(
                 "结论：{}",
-                crate::track::rules::Verdict::from_fields(complete, is_cheat).label()
+                crate::api::records::record_verdict(d)
+                    .map(|v| v.label())
+                    .unwrap_or("判定字段不全，结果未知")
             ));
             if let Some(list) = d.get("reasonList").and_then(|x| x.as_array()) {
                 for r in list {

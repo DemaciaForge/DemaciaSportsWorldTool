@@ -50,3 +50,8 @@ out.txt
 # 临时提交信展开文件（git commit -F 用，不应入库）
 _*.txt
 __pycache__/
+
+# 原始抓包及解码的个人数据仅留本地
+*.har
+/cos_run_data*.json
+/fields_decoded.json

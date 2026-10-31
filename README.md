@@ -6,6 +6,8 @@
 > 在原版基础上做了大幅精简与真实性改造。署名与许可证要求见文末。
 
 改造依据与代码事实记录在 [docs/REALISM_FINDINGS_zh.md](docs/REALISM_FINDINGS_zh.md)。
+Android 7.4.0 历史抓包的核验、协议补齐及已知边界见
+[docs/CAPTURE_ALIGNMENT_740_zh.md](docs/CAPTURE_ALIGNMENT_740_zh.md)。
 
 ## 界面
 
@@ -351,8 +353,15 @@ cargo build --no-default-features --target-dir target/cli
 测试：
 
 ```bash
-cargo test --workspace     # 144 项
+cargo test --workspace --locked
+python -m unittest discover -s tools -p test_audit_run_capture.py -v
 ```
+
+离线 HAR/OBS 交叉核验使用 `python tools/audit_run_capture.py --help`，无需第三方 Python 包。
+工具只输出脱敏汇总；原始抓包与解码数据应留在本地。
+
+`run` 退出码 `0` 表示 OBS 全部上传且详情明确达标无异常；`2` 表示记录已保存但后续验证未完成，
+请查询已有记录，不要自动重提。`run --dry-run` 的 `0` 仅表示本地检查通过。
 
 推 tag 自动构建多平台产物并发布 Release（见 `.github/workflows/release.yml`）。
 

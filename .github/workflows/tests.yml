@@ -39,3 +39,7 @@ jobs:
           name: windows-cargo-test-diagnostics
           path: diagnostics/*
           if-no-files-found: ignore
+
+      - name: Run offline capture audit tests
+        shell: pwsh
+        run: python -m unittest discover -s tools -p test_audit_run_capture.py -v

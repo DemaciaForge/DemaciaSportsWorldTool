@@ -39,7 +39,29 @@ pub struct RunParams {
 pub struct RunOutcome {
     pub result: SubmitResult,
     pub obs_ok: usize,
+    pub obs_expected: usize,
+    /// 只表示详情获取成功；达标结论见 verdict。
     pub detail_ok: bool,
+    pub verdict: Option<crate::track::rules::Verdict>,
+}
+
+impl RunOutcome {
+    pub fn verification_label(&self) -> &'static str {
+        self.verdict
+            .map(|v| v.label())
+            .unwrap_or(if self.detail_ok {
+                "判定字段不全，结果未知"
+            } else {
+                "详情未获取，结果未知"
+            })
+    }
+
+    pub fn verified(&self) -> bool {
+        self.detail_ok
+            && self.obs_expected > 0
+            && self.obs_ok == self.obs_expected
+            && self.verdict == Some(crate::track::rules::Verdict::Pass)
+    }
 }
 
 /// 本地 dry-run 的摘要；不会读取会话、访问网络或上传任何数据。
@@ -145,7 +167,7 @@ pub fn run_dry_run(params: &RunParams, anchor: Coordinate) -> Result<DryRunSumma
     let five = five_point_wrapper(&live_points, track.startTime);
     validate_five_point_wrapper(&five)?;
     let obj = build_obs_object(&track, 0, "dry-run", 0, &live_points);
-    let keys = obs_keys(&track, 0, "dry-run");
+    let keys = obs_keys(&track, 0, "dry-run")?;
     // 真机只写 1 个 key（日期式）；多写的那一个 App 从不读，是多余的痕迹。
     if keys.len() != 1 {
         return Err(format!("dry-run OBS key 数量异常: {}", keys.len()));
@@ -155,6 +177,7 @@ pub fn run_dry_run(params: &RunParams, anchor: Coordinate) -> Result<DryRunSumma
         "uuid",
         "uid",
         "run_data",
+        "extension_json",
         "fixed_point_json",
         "segment_json",
         "speed_json",
@@ -228,6 +251,9 @@ pub fn run_full_flow(
     params: &RunParams,
     log: &mut dyn FnMut(&str),
 ) -> Result<RunOutcome, String> {
+    if let Ok(mut slot) = VERIFY_DETAIL.lock() {
+        *slot = None;
+    }
     let sess: Session = client.login.clone().ok_or("未登录")?;
 
     // ① policy
@@ -614,8 +640,8 @@ pub fn run_full_flow(
         Err(e) => log(&format!("⚠ [ledger] 记账失败（不影响本次提交）: {e}")),
     }
 
-    // ⑥ OBS 上传（双 key）
-    log("[obs] 上传 OBS 对象（gzip+base64，10 键）…");
+    // ⑥ OBS 上传（日期式单 key）
+    log("[obs] 上传 OBS 对象（gzip+base64，11 键）…");
     // 从提交结果回填 track.startTime（含随机秒偏移），保证 body/OBS/flag 全链一致
     let mut track_for_obs = sp.track.clone();
     track_for_obs.startTime = result.start_ms;
@@ -628,7 +654,7 @@ pub fn run_full_flow(
         &area,
     );
     let payload = obj.to_string().into_bytes();
-    let keys = obs_keys(&track_for_obs, result.rrid, &result.uuid);
+    let keys = obs_keys(&track_for_obs, result.rrid, &result.uuid)?;
     let want = keys.len();
     let obs_ok = super::obs::upload_both_keys(client, &keys, &payload, log);
     if obs_ok == want {
@@ -644,17 +670,21 @@ pub fn run_full_flow(
     // ⑦ 详情验证
     sleep_secs(2);
     log("[verify] 拉取详情验证…");
+    let mut verdict = None;
     let detail_ok = match fetch_one_record(client, result.rrid) {
         Ok(d) => {
-            let complete = d.get("complete").and_then(|v| v.as_bool()).unwrap_or(false);
-            let is_cheat = d
-                .get("isCheat")
-                .and_then(|v| v.as_i64().or_else(|| v.as_bool().map(i64::from)))
-                .unwrap_or(0);
+            verdict = super::records::record_verdict(&d);
             log(&format!(
-                "√ [verify] rrid={} 结论={} dis={:?} time={:?}",
+                "{} [verify] rrid={} 结论={} dis={:?} time={:?}",
+                if verdict == Some(crate::track::rules::Verdict::Pass) {
+                    "√"
+                } else {
+                    "⚠"
+                },
                 result.rrid,
-                crate::track::rules::Verdict::from_fields(complete, is_cheat).label(),
+                verdict
+                    .map(|v| v.label())
+                    .unwrap_or("判定字段不全，结果未知"),
                 d.get("totalDis"),
                 d.get("totalTime"),
             ));
@@ -674,7 +704,9 @@ pub fn run_full_flow(
     Ok(RunOutcome {
         result,
         obs_ok,
+        obs_expected: want,
         detail_ok,
+        verdict,
     })
 }
 
@@ -682,6 +714,49 @@ pub fn run_full_flow(
 mod tests {
     use super::{run_dry_run, RunParams};
     use crate::location::Coordinate;
+
+    #[test]
+    fn fetched_detail_is_not_proof_of_successful_verification() {
+        use crate::track::rules::Verdict;
+        let mut outcome = super::RunOutcome {
+            result: super::SubmitResult {
+                rrid: 7,
+                uuid: "test".into(),
+                start_ms: 1_700_000_000_000,
+                complete: Some(true),
+                total_dis: 2000.0,
+                total_time: 800,
+                total_steps: 2000,
+                avg_step_freq: 150,
+                calorie: 100,
+                avg_power: 200,
+                sel_distance: 2000,
+            },
+            obs_ok: 1,
+            obs_expected: 1,
+            detail_ok: true,
+            verdict: None,
+        };
+        assert!(!outcome.verified());
+        assert_eq!(outcome.verification_label(), "判定字段不全，结果未知");
+        for verdict in [
+            Verdict::PassWithAnomaly,
+            Verdict::Fail,
+            Verdict::FailWithAnomaly,
+        ] {
+            outcome.verdict = Some(verdict);
+            assert!(!outcome.verified());
+        }
+        outcome.verdict = Some(Verdict::Pass);
+        assert!(outcome.verified());
+        outcome.detail_ok = false;
+        assert!(!outcome.verified());
+        outcome.detail_ok = true;
+        outcome.obs_ok = 0;
+        assert!(!outcome.verified());
+        outcome.obs_expected = 0;
+        assert!(!outcome.verified());
+    }
 
     fn params() -> RunParams {
         RunParams {

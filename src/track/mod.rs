@@ -225,7 +225,7 @@ mod tests {
         assert!((back.1 - bd.1).abs() < 1e-6, "lng={} 期望 {}", back.1, bd.1);
     }
 
-    /// OBS 对象：10 键、gzip+base64 可解、run_data 27 键点集。
+    /// OBS 对象：11 键、gzip+base64 可解、run_data 27 键点集。
     #[test]
     fn test_obs_object_structure() {
         let pts: Vec<serde_json::Value> = sample_points()
@@ -261,6 +261,7 @@ mod tests {
                 "uuid",
                 "uid",
                 "run_data",
+                "extension_json",
                 "fixed_point_json",
                 "segment_json",
                 "speed_json",
@@ -323,10 +324,45 @@ mod tests {
             assert!(end - begin <= 30_000, "段 {i} 不得超过 30 秒");
         }
         // obs key 只有 1 个（真机只写日期式那一个）
-        let ks = obs_keys(&track, 1320403809, "UUID-TEST");
+        let ks = obs_keys(&track, 1320403809, "UUID-TEST").unwrap();
         assert_eq!(ks.len(), 1);
         assert!(ks[0].contains("run_data/"));
         assert!(ks[0].ends_with("/UUID-TEST.json"));
+        // HAR 中 extension_json 是 gzip(空串)，不是缺键或 gzip("null")。
+        let raw =
+            crate::crypto::envelope::b64_decode(obj["extension_json"].as_str().unwrap()).unwrap();
+        let mut dec = flate2::read::GzDecoder::new(&raw[..]);
+        let mut extension = String::new();
+        dec.read_to_string(&mut extension).unwrap();
+        assert!(extension.is_empty());
+        // 抓包只作为字段名契约，不把账号、坐标、签名 URL 或原始样本入库。
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/obs_schema_740.json")).unwrap();
+        let field_set = |v: &serde_json::Value| -> std::collections::BTreeSet<String> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(
+            obj.as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            field_set(&schema["obs_fields"])
+        );
+        for p in &pts {
+            assert_eq!(
+                p.as_object()
+                    .unwrap()
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                field_set(&schema["point_fields"])
+            );
+        }
     }
 }
 

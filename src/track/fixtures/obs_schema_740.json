@@ -1,0 +1,5 @@
+{
+  "source": "2026-10-26 historical Android 7.4.0 capture; field names only",
+  "obs_fields": ["uid", "run_data", "step_freq_json", "extension_json", "speed_json", "runFaceCheck", "laps_json", "uuid", "rrid", "segment_json", "fixed_point_json"],
+  "point_fields": ["avgSpeed", "bdA", "bdD", "bdG", "bdS", "coorType", "count", "dtr", "flag", "gLat", "gLng", "gainTime", "id", "lat", "lng", "locType", "locationId", "queueNum", "radius", "speed", "state", "stepDistance", "totalDis", "totalTime", "type", "validDis", "validTime"]
+}

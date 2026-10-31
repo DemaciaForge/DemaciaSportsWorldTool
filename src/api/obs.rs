@@ -41,7 +41,7 @@ pub fn put_object(
         // 与签名时的 contentType 保持一致（真机是文本形态对象）。
         .set("Content-Type", "text/plain")
         .send_bytes(payload)
-        .map_err(super::client::ureq_err)?;
+        .map_err(object_error)?;
     log(&format!(
         "[obs] PUT {} -> {}",
         shorten(signed_url),
@@ -70,11 +70,22 @@ pub fn upload_both_keys(
     ok
 }
 
-fn shorten(url: &str) -> &str {
-    // 只显示 objectKey 部分，避免日志过长
-    let start = url.find("run_data").unwrap_or(0);
-    let end = (start + 60).min(url.len());
-    &url[start..end]
+fn shorten(url: &str) -> String {
+    // 先去掉查询/fragment，再找路径。旧字节切片会泄漏 q-ak/q-signature，
+    // 还可能在 Unicode 边界 panic。
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    match path.find("/run_data/") {
+        Some(start) => crate::textlog::truncate(&path[start + 1..], 80),
+        None => "<对象地址已隐藏>".into(),
+    }
+}
+
+fn object_error(e: ureq::Error) -> String {
+    // COS 错误正文和 Transport 的 Display 都可能包含完整的签名 URL。
+    match e {
+        ureq::Error::Status(code, _) => format!("OBS HTTP {code}"),
+        ureq::Error::Transport(t) => format!("OBS 网络错误: {:?}", t.kind()),
+    }
 }
 
 /// 回读验证（GET 签名）。
@@ -86,8 +97,44 @@ pub fn fetch_object(
 ) -> Result<Value, String> {
     let signed = sign_url(client, "Get", key)?;
     let agent = super::client::make_agent();
-    let resp = agent.get(&signed).call().map_err(super::client::ureq_err)?;
-    let text = resp.into_string().unwrap_or_default();
+    let resp = agent.get(&signed).call().map_err(object_error)?;
+    let text = resp
+        .into_string()
+        .map_err(|_| "OBS 响应读取失败".to_string())?;
     log(&format!("[obs] GET 回读 {} 字节", text.len()));
     serde_json::from_str(&text).map_err(|e| format!("OBS 对象解析失败: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn object_log_excludes_signed_query_and_handles_unicode() {
+        assert_eq!(shorten("https://example.invalid/run_data/2026102619/test.json?q-ak=private&q-signature=secret"),
+            "run_data/2026102619/test.json");
+        assert_eq!(
+            shorten("https://example.invalid/?q-signature=secret&run_data=value"),
+            "<对象地址已隐藏>"
+        );
+        assert_eq!(
+            shorten("https://example.invalid/run_data/记录.json#secret"),
+            "run_data/记录.json"
+        );
+        let long = format!(
+            "https://example.invalid/run_data/{}?secret",
+            "字".repeat(100)
+        );
+        assert_eq!(shorten(&long).chars().count(), 80);
+    }
+
+    #[test]
+    fn object_http_errors_never_echo_response_body() {
+        let response =
+            ureq::Response::new(403, "Forbidden", "q-ak=private&q-signature=secret").unwrap();
+        assert_eq!(
+            object_error(ureq::Error::Status(403, response)),
+            "OBS HTTP 403"
+        );
+    }
 }

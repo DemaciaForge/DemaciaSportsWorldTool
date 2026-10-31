@@ -116,6 +116,20 @@ fn path_unavailable(err: &str) -> bool {
 }
 
 /// 单条跑步详情（get_one_record 返回的完整 data）。
+/// 缺失判定字段表示未知；不能把缺失 isCheat 默认成正常。
+pub fn record_verdict(raw: &Value) -> Option<crate::track::rules::Verdict> {
+    let complete = raw.get("complete")?.as_bool()?;
+    let cheat = raw
+        .get("isCheat")
+        .or_else(|| raw.get("ischeat"))
+        .or_else(|| raw.get("IsCheat"))?;
+    let is_cheat = cheat.as_i64().or_else(|| cheat.as_bool().map(i64::from))?;
+    Some(crate::track::rules::Verdict::from_fields(
+        complete, is_cheat,
+    ))
+}
+
+/// 已解析的记录详情。
 #[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunDetail {
@@ -242,6 +256,44 @@ pub fn fetch_detail(client: &mut ApiClient, rrid: i64) -> Result<RunDetail, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_verdict_requires_explicit_valid_fields() {
+        use crate::track::rules::Verdict;
+        assert_eq!(
+            record_verdict(&json!({"complete": true, "isCheat": 0})),
+            Some(Verdict::Pass)
+        );
+        assert_eq!(
+            record_verdict(&json!({"complete": true, "isCheat": 2})),
+            Some(Verdict::PassWithAnomaly)
+        );
+        assert_eq!(
+            record_verdict(&json!({"complete": false, "isCheat": 0})),
+            Some(Verdict::Fail)
+        );
+        assert_eq!(
+            record_verdict(&json!({"complete": false, "isCheat": true})),
+            Some(Verdict::FailWithAnomaly)
+        );
+        assert_eq!(
+            record_verdict(&json!({"complete": true, "ischeat": false})),
+            Some(Verdict::Pass)
+        );
+        assert_eq!(
+            record_verdict(&json!({"complete": true, "IsCheat": 0})),
+            Some(Verdict::Pass)
+        );
+        for raw in [
+            json!({}),
+            json!({"complete": true}),
+            json!({"isCheat": 0}),
+            json!({"complete": null, "isCheat": 0}),
+            json!({"complete": true, "isCheat": "0"}),
+        ] {
+            assert_eq!(record_verdict(&raw), None, "缺失/非法字段不能被解释为达标");
+        }
+    }
 
     #[test]
     fn test_detail_serializes_camel_case() {

@@ -449,12 +449,18 @@ impl App {
             let payload = match crate::api::flow::run_full_flow(&mut client, &params, &mut log) {
                 Ok(out) => {
                     log(&format!(
-                        "全链完成 rrid={} obs={}/2 verify={} uuid={}",
-                        out.result.rrid, out.obs_ok, out.detail_ok, out.result.uuid
+                        "记录已保存 rrid={} obs={}/{} 结论={} uuid={}",
+                        out.result.rrid,
+                        out.obs_ok,
+                        out.obs_expected,
+                        out.verification_label(),
+                        out.result.uuid
                     ));
                     serde_json::json!({
                         "ok": true, "rrid": out.result.rrid,
-                        "obs_ok": out.obs_ok, "verify": out.detail_ok,
+                        "obs_ok": out.obs_ok, "obs_expected": out.obs_expected,
+                        "detail_ok": out.detail_ok, "verify": out.verified(),
+                        "verification_label": out.verification_label(),
                         "uuid": out.result.uuid,
                         "dist": out.result.total_dis, "dur": out.result.total_time,
                         "steps": out.result.total_steps, "avg_step_freq": out.result.avg_step_freq,
