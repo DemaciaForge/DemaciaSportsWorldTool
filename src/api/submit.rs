@@ -86,6 +86,38 @@ pub struct SubmitResult {
     pub sel_distance: i64,
 }
 
+/// 极验回执的业务场景。
+///
+/// 真机起跑为 `4`（`RunCreditFragment:831` / `RunFreeFragment:810` 都传 4）；
+/// 经过打卡点是 `6`（`RunSequencePImpl:163` / `RunRandomPImpl:271`）；
+/// 结束时是 `7`（`RunEndPImpl:65` 等）。
+const GEE_SCENE_RUN: i64 = 4;
+
+/// 生成与提交体配套的 `(errorCode, geeToken)`。
+///
+/// 两者必须成对（见 `geetoken::code_for_token`）：模型 token → `200`，
+/// 本地降级 token → `-300`，空串 → `-999`。
+fn gee_fields(
+    uid: i64,
+    uuid: &str,
+    identity: &crate::crypto::header::HeaderIdentity,
+) -> (i64, String) {
+    let gt = crate::api::geetoken::generate_local(
+        uid,
+        uuid,
+        GEE_SCENE_RUN,
+        identity.app_install_time,
+        &crate::api::geetoken::GtDevProfile::from_identity(identity),
+    );
+    // 不可能不一致；一旦不一致说明 token 形态与回调码逻辑脱钩。
+    debug_assert_eq!(
+        crate::api::geetoken::code_for_token(&gt.token),
+        gt.error_code,
+        "极验 token 形态与 errorCode 不匹配"
+    );
+    (gt.error_code, gt.token)
+}
+
 /// 提交跑步记录（sportType=1 自由跑 + 实时五点）。
 pub fn submit_record(
     client: &mut ApiClient,
@@ -169,9 +201,24 @@ pub fn submit_record(
             Value::String(p.five_point_json.clone()),
         );
     }
-    // Android 必现扩展字段
-    body.insert("errorCode".into(), Value::from(0));
-    body.insert("geeToken".into(), Value::String(String::new()));
+    // ── 极验 GeeGuard（Android 必现扩展字段）──
+    //
+    // 真机的 `geeToken` 与 `errorCode` **必须成对**（`geetoken::code_for_token`）：
+    //
+    //   G02\0 服务端 token（base64 `RzAy`） → errorCode 200
+    //   GEE\0 本地降级 token（base64 `R0VF`） → errorCode -300
+    //   空串                                      → errorCode -999
+    //
+    // 旧实现发 `errorCode = 0` + 空串：`0` 不在极验任何回调码枚举里，
+    // 与任何 token 形态都对不上。现在至少保证两者自洽。
+    let (gee_code, gee_tok) = gee_fields(p.uid, &run_uuid, &client.identity);
+    log(&format!(
+        "√ [gee] 本地 token {} 字符，errorCode {}",
+        gee_tok.len(),
+        gee_code
+    ));
+    body.insert("errorCode".into(), Value::from(gee_code));
+    body.insert("geeToken".into(), Value::String(gee_tok));
     body.insert("unauthorized".into(), Value::from(0));
     body.insert("themeId".into(), Value::from(0));
     body.insert("goalId".into(), Value::Null);
@@ -284,4 +331,45 @@ fn client_token(client: &ApiClient) -> String {
 fn truncate_json(v: &Value) -> String {
     let s = v.to_string();
     s.chars().take(240).collect()
+}
+
+#[cfg(test)]
+mod gee_tests {
+    use super::*;
+    use crate::api::geetoken;
+
+    /// 提交体里的 `errorCode` 必须与 `geeToken` 形态成对。
+    ///
+    /// 旧实现发 `0` + 空串：`0` 不在极验任何回调码枚举里
+    /// （`200/-200/-300/-500/-501/-999`），与任何 token 形态都对不上。
+    #[test]
+    fn submit_error_code_pairs_with_token() {
+        let mut id = crate::crypto::header::HeaderIdentity::default();
+        id.platform = "android".into();
+        id.device_name = "Redmi K30 5G".into();
+        id.os_version = "12".into();
+        id.app_install_time = 1_780_000_000_000;
+
+        let (code, tok) = gee_fields(16835824, "uuid-1", &id);
+        assert_eq!(code, -300, "本地降级 token 必须配 -300");
+        assert!(tok.starts_with("R0VF"), "应为 GEE 容器");
+        assert_eq!(geetoken::code_for_token(&tok), code);
+        assert_ne!(code, 0, "0 不是合法的极验回调码");
+    }
+
+    /// 设备字段必须与身份档案同源（否则 token 与 HTTP 头自相矛盾）。
+    #[test]
+    fn dev_profile_follows_identity() {
+        let mut id = crate::crypto::header::HeaderIdentity::default();
+        id.platform = "android".into();
+        id.device_name = "Redmi K30 5G".into();
+        id.os_version = "12".into();
+
+        let dev = geetoken::GtDevProfile::from_identity(&id);
+        assert_eq!(dev.model, "Redmi K30 5G");
+        assert_eq!(dev.osv, "12");
+        assert!(dev.ven.contains("android_wh_physicalfitness"));
+        // 屏幕尺寸应从机型档案推出且为正
+        assert!(dev.w > 0 && dev.h > 0, "w={} h={}", dev.w, dev.h);
+    }
 }

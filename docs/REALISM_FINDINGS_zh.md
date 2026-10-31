@@ -299,22 +299,76 @@ App：DeepKnowUtils.OooO0OO(cb)          提交记录前，要 token
 - 风控层（极验）与业务判罚层是两套东西，后者对应的文案是
   `APP运行环境数据异常`。
 
-### 6.5 为什么不去补 geeToken（一个硬约束）
+### 6.5 geeToken 已被完全还原（2026-10-31，推翻旧的"硬约束"结论）
 
-| 做法 | 结果 |
-|---|---|
-| 抓包复用 receipt | `geeIDTimestamp` 有时效，且绑定 `uuid` / `app_id` / `session_id` |
-| 真机跑 SDK | 可行，但那就是直接用 App，无意义 |
-| 逆向 native 自签 | `libgtcore.so` 为 OLLVM 平坦化 + **58 个 `.datadiv_decode` 加密函数**，白盒加密 |
-| PC 上自建载荷 | 载荷内容就是 PC 特征，极验的存在意义就是识别这个 |
+**此前本节写的是"补不上"，那是错的。** 真实算法如下，三条证据全部在本地复算通过：
 
-`libgtcore.so` 静态观测（Ghidra，759 函数，`.text` 1.04 MB）：
-`.init_array` 58 项全为 `R_AARCH64_ABS64` + `addend=0`，
-对应 58 个 `.datadiv_decode<20位数>式` 函数名；`JNI_OnLoad` 为状态机扁平化。
+```text
+key    = "WS1nbWQfMJ1merhqY5RsFZIxrJ/54JE="   // 32 字节 ASCII
+digest = SHA256(紧凑 JSON)
+nonce  = random4 || digest[0..4]              // 8 字节
+iv     = nonce 的 16 个 ASCII hex 字符        // 不是 nonce 本身
+body   = AES-256-CBC(PKCS7(明文), key, iv)
+token  = base64("GEE\0" + 0x05 + nonce_hex + u32BE(len(body)) + body)
+```
+
+#### 证据一：密钥位置
+
+`libgtcore.so` 的 `.rodata` 偏移 `0x5807` 起 32 字节，逐字节 XOR `0x6e`：
+
+```
+原始 393d5f000c393f0823245f030b1c061f375b3c1d283427161c24415b5a242b53
+XOR  → WS1nbWQfMJ1merhqY5RsFZIxrJ/54JE=
+```
+
+**这不是白盒加密。** 之前搜 `AES`/`OpenSSL` 符号和 base64 字母表都没命中，是因为
+`.rodata` 被 XOR 过，任何明文搜索都不会命中——**把"搜不到"当成了"不存在"，是推理漏洞。**
+
+#### 证据二：黄金向量
+
+```
+plain = {"a":1}   random4 = 11 22 33 44
+→ R0VFAAUxMTIyMzM0NDAxNWFiZDdmAAAAECc8nwc1mlvLNbq5fbAGXQs=
+```
+
+用独立 Python 参考实现复算，逐字节一致。
+
+#### 证据三：AppID
+
+`R.string.geet_geeguard_id` = `mhs0n2abroy5ayzs5adtslzzsk1cya6h`，
+通过手写 ARSC 解析器绑定证实：
+
+```
+ResTable_entry @0x2d40e0  key#14766 ('geet_geeguard_id')
+Res_value      @0x2d40e8  dtype=0x03(string)  data=5562
+global pool[5562] = 'mhs0n2abroy5ayzs5adtslzzsk1cya6h'
+```
+
+注意它与 token 明文里的数字 `appId: 12439574` 是**两个层级**，拿错会得到
+`{"code":-50101,"msg":"not app_id"}`。
+
+#### 两级 token 与 errorCode 的配对关系
+
+| 形态 | base64 前缀 | 长度 | 来源 | 配对 `errorCode` |
+|---|---|---|---|---|
+| 本地降级 `GEE\0` | `R0VF` | ~3384 | **纯离线可生成** | `-300` |
+| 服务端 `G02\0` | `RzAy` | ~348–500 | POST 到 `client_report` 换回 | `200` |
+| 空串 | — | 0 | 兜底失败 | `-999` |
+
+`errorCode` 由 token 形态推导，**两者必须成对**。旧实现发 `errorCode = 0` + 空串，
+而 `0` 不在极验任何回调码枚举里（`200/-200/-300/-500/-501/-999`），
+与任何 token 形态都对不上。
+
+代码实现见 `src/api/geetoken.rs`（8 项回归测试，含黄金向量与容器结构自检）。
 
 ### 6.6 本节能与不能保证的
 
-- **能**：上报路径、字段来源、两条调用线的区别、时间戳归属。
-- **不能**：`Core.getData()` 内部采集了什么（白盒）；
-  `addSignature(payload)` 在 native 里是否上传。此处不确定：只能确定
-  它**不在 HTTP body 里**，无法排除 native 将其写入其他字段。
+- **能**：上报路径、字段来源、两条调用线的区别、时间戳归属；
+  本地 token 的加密算法、密钥、容器结构、AppID —— 均本地复算通过。
+- **不能**：`data.test` 块那些硬编码值（`sh` / `ka.st` / `lauf` / `edp` / `xpd`）
+  是"每台设备各不同"还是"所有设备相同"，无法验证；
+  `et`（有效秒数）的确切语义未确认；
+  服务端是否把 `data.dev` 与 HTTP 头对账，未知。
+- **待实测**：真机正常提交发的是 `200` + `G02` 还是 `-300` + `GEE`。
+  这一点只有抓包能回答，`tools/mitm_capture.py` 已加入
+  `client_report` 白名单并会自动解密 token 打出字段对比。
